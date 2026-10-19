@@ -23,3 +23,8 @@ Tests use Node's built-in runner and in-memory SQLite with the actual migrations
 7. Verify Pages and Worker each have a successful, independent Cloudflare deployment. A successful Pages upload does not deploy the Worker.
 
 Do not use real passwords, users, provider keys, or production data in local tests. A local test cannot verify browser third-party-cookie behavior or live Cloudflare deployment health.
+
+
+## Page and responsive checks
+
+Check the distinct Pages URLs after deployment: `/`, `/discover.html`, `/dashboard.html`, `/testers.html`, and `/admin.html`. A guest who opens the founder workspace is sent to sign-in; a non-admin who opens the admin console is redirected to sign-in and the API still enforces the admin role. At phone widths, verify the menu button opens the page navigation and the workspace forms and cards stack to one column.

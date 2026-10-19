@@ -2,7 +2,7 @@
 
 **Reach the right people. Grow with real users.**
 
-Requva is a product discovery and tester feedback workspace. Its static frontend lives in `frontend/`; the API is a Cloudflare Worker in `worker/`, with Cloudflare D1 storage.
+Requva is a product discovery and tester feedback workspace. The static frontend lives in `frontend/` as separate home, discovery, founder workspace, tester area, and admin console pages. The API is a Cloudflare Worker in `worker/`, with Cloudflare D1 storage.
 
 ## What the app does
 
@@ -31,7 +31,12 @@ Requva currently has no social network publishing, mailing, paid acquisition, au
 
 ## Repository map
 
-- `frontend/` — static, responsive user interface.
+- `frontend/index.html` — public home.
+- `frontend/discover.html` — searchable public product directory.
+- `frontend/dashboard.html` — signed-in founder workspace.
+- `frontend/testers.html` — public tester discovery and signed-in tester activity.
+- `frontend/admin.html` — administrator-only operations console.
+- `frontend/` — responsive shared styles and scripts for these pages.
 - `worker/src/index.js` — Worker API and server-side Gemini requests.
 - `worker/migrations/` — additive D1 schema migrations.
 - `docs/` — deployment, database, integration, security, and testing notes.

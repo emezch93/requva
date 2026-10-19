@@ -44,7 +44,7 @@ In the Worker settings, set `FRONTEND_ORIGIN` to the exact Pages origin, such as
 
 ## 6. Accounts
 
-Public account registration is enabled. New accounts receive the ordinary `user` role. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap secret is needed.
+Public account registration is enabled in the Worker. New accounts receive the ordinary `user` role and set a recovery question and answer during signup. Reset asks for the account email and that answer; it does not send an email. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap secret is needed.
 
 ## 7. Verify independent deployments
 

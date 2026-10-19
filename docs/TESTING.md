@@ -10,16 +10,16 @@ cd ..
 node --check frontend/app.js
 ```
 
-Tests use Node's built-in runner and in-memory SQLite with the actual migrations. They exercise registration at the Cloudflare-supported 100,000 PBKDF2 iteration count, login/session invalidation and security-question reset, product/campaign/tester/feedback flows, analytics idempotency, access/CSRF rules, and Gemini request handling with a fake local provider response. They do not call Google or Cloudflare services and use no production secrets.
+Tests use Node's built-in runner and in-memory SQLite with the actual migrations. They exercise registration at the Cloudflare-supported 100,000 PBKDF2 iteration count, login/session invalidation and security-question reset, product moderation, verified opportunity catalog rules, owner-reported versus admin-verified activity, testing request consent and tester milestones, feedback, listing reports, analytics idempotency, access/CSRF rules, and Gemini request handling with a fake local provider response. They do not call Google or Cloudflare services and use no production secrets.
 
 ## Production smoke checks
 
 1. In Cloudflare Worker deployment history, verify the active version was built from the current `main` commit. A log saying PBKDF2 requested 120,000 means that version is stale; current source must use exactly `ITERATIONS = 100000`.
-2. Confirm D1 migrations 0001 and 0002 applied to the production database.
+2. Confirm D1 migrations 0001, 0002, and 0003 applied to the production database.
 3. Check `GET https://requva.emezch93.workers.dev/api/v1/health`; then check signup, login, logout, and session refresh from the Pages site.
-4. As a user, add a product, make a manual campaign, join a different active product as a tester, and send consent-based feedback.
+4. As a user, add a product, make a manual campaign, have an admin approve the directory listing, create an open testing request, opt in with its stated consent, mark testing started, and send consent-based feedback. Add actual opportunity entries as admin before trying the distribution planner.
 5. As an admin, check Gemini status. Add the Worker secret before testing AI; test connection and make one draft. Confirm the secret is never shown in the page or returned by the API.
-6. Create a tracking token and send a visit from a server. Repeat the same event key and confirm the count remains one.
+6. Create a tracking token and send a visit from a server. Repeat the same event key and confirm the count remains one. The resulting analytics are owner reported, not independently verified.
 7. Verify Pages and Worker each have a successful, independent Cloudflare deployment. A successful Pages upload does not deploy the Worker.
 
 Do not use real passwords, users, provider keys, or production data in local tests. A local test cannot verify browser third-party-cookie behavior or live Cloudflare deployment health.

@@ -40,3 +40,12 @@ Supported event types are `visit`, `signup`, `activation`, and `retention`. Each
 Campaign plans are drafts for a person to review and publish themselves. Requva does not contact customers, publish messages, sign into social sites, or scrape web communities. Gemini suggestions are unverified hypotheses and may be wrong; verify claims before using them. Feedback analysis redacts common email addresses and phone numbers, but do not submit sensitive personal or health information.
 
 Review each provider's current terms, consent rules, quotas, and costs before adding more integrations.
+
+
+## Distribution and opportunity catalog
+
+Requva does not publish to social networks or send outreach emails. These execution modes are currently manual or unavailable. Administrators add real opportunities with destination and source links, the audience fit, requirements, eligibility, next action, and a date when the source was checked. New entries begin in needs-review status and do not appear in the founder catalog until an administrator verifies them. Recheck destination rules before use because the catalog can become stale.
+
+Founders may create activities only from verified entries. Activity progress is owner reported. Reporting completion requires a public evidence URL or notes; the product owner cannot verify their own completion. A different administrator must review the evidence and add verification notes before the state becomes verified.
+
+AI opportunity matches only return catalog entries that were already verified by an administrator. The fit explanation is a hypothesis from the supplied product profile and catalog fields, not live research.

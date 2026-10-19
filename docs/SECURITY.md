@@ -28,3 +28,12 @@ Security-question recovery is weaker than email-based one-time links because ans
 ## Operational limits
 
 These controls are not a security certification. Configure Cloudflare bot/WAF controls, backups, retention/deletion procedures, and alerts before broad public use. D1 rate limits write to the database and may need tuning as traffic grows. Monitor Worker logs for errors; never paste secrets into tickets or screenshots.
+
+
+## Directory, tester, and distribution controls
+
+New product listings default to pending and are visible publicly only after administrator approval. Listing reports are stored for review. Testers must opt in to an open request and confirm its consent terms; the terms they accepted are stored with their tester record. Product owners see aggregate opt-in, started, and feedback-submitted counts, not tester contact details. Testers may withdraw their opt-in.
+
+Owners may report activity status and evidence but cannot set `verified_completed`. Only an administrator can verify owner-reported evidence, and an administrator cannot verify their own activity. Analytics events authenticated with a product tracking token are owner-reported measurements. They are deduplicated but not independently audited by Requva.
+
+The opportunity catalog is manually maintained. A verification date records when an administrator checked the supplied destination and source links; the app does not crawl or continuously recheck those links.

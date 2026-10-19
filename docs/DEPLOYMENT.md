@@ -35,3 +35,8 @@ Create an account normally, then promote your account using a D1 Console query. 
 Migration 0002 adds AI usage, saved campaign plan, and hashed product-tracking-token tables. The Worker build command applies pending migrations before deploy. See [DATABASE.md](DATABASE.md) to inspect migration state. Never edit a migration that already ran remotely; add a new numbered migration.
 
 For local code checks, see [TESTING.md](TESTING.md). Cloudflare dashboard credentials and the live deployment are outside this repository; only a successful production deployment and smoke check confirm the service is live.
+
+
+## Independent deployments
+
+Pages publishes the static files from `frontend/`; it does not deploy the API. Workers Builds uses the `worker/` root and runs the configured remote migration command before deploying the Worker. After a code change, check each deployment independently. A Pages success message does not prove the Worker version changed, and a Worker deployment does not prove Pages published the latest frontend.

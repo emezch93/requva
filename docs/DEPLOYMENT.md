@@ -1,71 +1,37 @@
-# Deployment: GitHub → Pages + Workers Builds
+# Deployment: Requva on Cloudflare
 
-This repository is prepared for two independent Cloudflare Git integrations. The Cloudflare account owner must connect each project from the Cloudflare dashboard and authorize GitHub; these account-level connections cannot be created from this repository. Pages Git integration does not deploy the API Worker. For production authentication, use a custom domain for Pages and a Worker custom domain under the same registrable domain (for example `requva.example.com` and `api.requva.example.com`). The separate `pages.dev` and `workers.dev` hosts are cross-site; browser third-party-cookie controls may block session cookies there.
+The repository is connected to two separate Cloudflare Git deployments: Pages for the static frontend and Workers Builds for the API. They are independent; one can deploy while the other is stale. The account owner must authorize the GitHub integration in Cloudflare.
 
-## 1. Push the repository to GitHub
+## Current project settings
 
-The requested repository is `https://github.com/emezch93/requva`. Push the project to its `main` branch. Keep the repository free of `.dev.vars`, API keys, passwords, and account secrets. For a local checkout:
+- GitHub repository: `emezch93/requva`, production branch `main`.
+- Pages project: `requva`, static files from `frontend/`. Use repository root `/`, no build command, and output directory `frontend`. The site should serve `frontend/index.html` at `https://requva.pages.dev/`.
+- Worker: `requva`, root directory `worker`, D1 binding `DB → requva-production`. The current Worker dashboard command is `npm run db:remote && npm run deploy`; the database migration runs before the Worker deploy.
+- Worker API origin: `https://requva.emezch93.workers.dev`.
+- Frontend `FRONTEND_ORIGIN`: `https://requva.pages.dev`.
 
-```powershell
-git clone https://github.com/emezch93/requva.git
-# Copy the project files into the checkout, then:
-git add .
-git commit -m "Build Requva application"
-git branch -M main
-git push -u origin main
-```
+Check these settings in the Cloudflare dashboard if a build deploys the wrong files. The Pages project serves static assets only; the Worker handles all `/api/v1` endpoints.
 
-## 2. Create D1 before the first Worker build
+## Deploying code changes
 
-Create `requva-production` using the steps in [DATABASE.md](DATABASE.md), copy the returned database ID into `worker/wrangler.jsonc`, and commit that configuration before creating the Worker Builds project. The placeholder database ID intentionally prevents an accidental unbound production deploy.
+1. Commit to GitHub `main`. A frontend commit should trigger Pages. A Worker or migration commit should trigger Workers Builds.
+2. In **Workers & Pages → requva → Deployments**, open the newest production deployment. Confirm its commit SHA is the new `main` SHA and status is **Success**.
+3. Confirm the version settings include `FRONTEND_ORIGIN=https://requva.pages.dev`, `AI_ENABLED=true`, D1 `DB` binding to `requva-production`, and the `GEMINI_API_KEY` secret if AI will be used.
+4. Visit `https://requva.emezch93.workers.dev/api/v1/health` and confirm it returns JSON with `ok: true`.
+5. Pages deploys independently. Confirm its latest successful deployment is also from the current commit. If `requva.pages.dev` shows 404, check **Workers & Pages → requva (Pages) → Deployments** and verify output contains `index.html`; then check **Custom domains** to ensure `requva.pages.dev` is attached to that Pages project.
 
-## 3. Create the Pages project
+Do not troubleshoot signup against an old Worker version. The repository source fixes PBKDF2 at `100000`. If a Worker log still says “requested 120000”, Cloudflare is running an older version or a different Worker. Confirm the deployment's Git commit and Worker name, then retry signup only after the new version succeeds.
 
-1. Cloudflare Dashboard → **Workers & Pages** → **Create application** → **Pages** → **Import an existing Git repository**.
-2. Authorize Cloudflare's GitHub app for `emezch93/requva`.
-3. Use `main` as the production branch.
-4. Set the repository root to `/` (the repo root). Set build command to `exit 0`. Set build output directory to `frontend`.
-5. Save and deploy. Confirm that `https://<your-pages-project>.pages.dev/` serves the landing page.
-6. Under Pages **Settings → Builds → Build watch paths**, include `frontend/**` and exclude `worker/**` and unrelated docs. If dashboard path filters are unavailable, Pages may build on every repo commit; the frontend is static and the build command is a no-op.
+## Add the Gemini key without exposing it
 
-## 4. Create the Worker Builds project separately
+In the Worker dashboard, open **Settings → Variables and Secrets → Production → Add → Secret**. Set the name to `GEMINI_API_KEY`, paste the key value from Google AI Studio, and save/deploy. Do not add it to Pages, `frontend/config.js`, `wrangler.jsonc`, GitHub, or browser developer tools. The Worker reads it through `env.GEMINI_API_KEY`.
 
-1. Cloudflare Dashboard → **Workers & Pages** → **Create application** → **Worker** → **Connect to Git** (Workers Builds).
-2. Authorize the same GitHub repository. Select `main` as production branch.
-3. Set the Worker root directory to `worker`. Use `npm run deploy` as the build/deploy command (Workers Builds installs the directory's `package.json`; the script runs Wrangler).
-4. Confirm `worker/wrangler.jsonc` is detected and the build completes. In Worker Builds settings, set watch paths to `worker/**` (including `worker/migrations/**`). This is a separate project from Pages.
-5. Record the deployed API origin, usually `https://requva-api.<account-subdomain>.workers.dev`.
+## Admin access
 
-## 5. Configure the frontend API origin
+Create an account normally, then promote your account using a D1 Console query. See [SECURITY.md](SECURITY.md). Never enable a public admin bootstrap endpoint.
 
-Edit `frontend/config.js` and replace `https://requva-api.example.workers.dev` with the actual Worker origin (origin only, no `/api/v1`). Make the same replacement in the `connect-src` directive in `frontend/_headers`. Commit this frontend change. Pages deploys it automatically after the integration is connected.
+## Database
 
-In the Worker settings, set `FRONTEND_ORIGIN` to the exact Pages origin, such as `https://requva.pages.dev` (no trailing slash). For a custom domain, use its exact `https://` origin. Commit the matching `vars.FRONTEND_ORIGIN` in `worker/wrangler.jsonc` and redeploy. Preview Pages origins will not pass this production allowlist; configure a separate preview Worker environment before testing preview auth flows.
+Migration 0002 adds AI usage, saved campaign plan, and hashed product-tracking-token tables. The Worker build command applies pending migrations before deploy. See [DATABASE.md](DATABASE.md) to inspect migration state. Never edit a migration that already ran remotely; add a new numbered migration.
 
-## 6. Accounts
-
-Public account registration is enabled in the Worker. New accounts receive the ordinary `user` role and set a recovery question and answer during signup. Reset asks for the account email and that answer; it does not send an email. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap secret is needed.
-
-## 7. Verify independent deployments
-
-- Make a small `frontend/` change and confirm only Pages' watched build runs.
-- Make a harmless `worker/` change and confirm Workers Builds runs independently.
-- `GET https://<worker-origin>/api/v1/health` should return `ok: true`.
-- Open the Pages site, create an account, add a product, create a campaign, opt into another product as a tester, and submit feedback.
-- Confirm a Pages-origin request succeeds with cookies and a different origin is rejected.
-- Confirm the dashboard build histories show separate Pages and Worker deployments. Do not call the system live until these checks pass.
-
-## Alternative when dashboard Git integration is unavailable
-
-Cloudflare requires dashboard authorization for both Git providers. If your plan/account cannot use Workers Builds, use the CLI for the Worker only:
-
-```powershell
-cd worker
-npm install
-npx wrangler deploy
-```
-
-This is a manual fallback; it does not create automatic Worker deployments. Pages still uses its Git integration. Verify `npx wrangler deployments list` and the Worker health route.
-
-Cloudflare setup references: [Pages Git integration](https://developers.cloudflare.com/pages/configuration/git-integration/), [static HTML Pages deployment](https://developers.cloudflare.com/pages/framework-guides/deploy-anything/), and [Workers Builds Git integration](https://developers.cloudflare.com/workers/ci-cd/builds/git-integration/).
-
+For local code checks, see [TESTING.md](TESTING.md). Cloudflare dashboard credentials and the live deployment are outside this repository; only a successful production deployment and smoke check confirm the service is live.

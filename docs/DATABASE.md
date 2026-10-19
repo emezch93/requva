@@ -30,15 +30,9 @@ npx wrangler d1 execute requva-production --remote --command "SELECT name FROM s
 
 The expected tables include `users`, `sessions`, `products`, `campaigns`, `testers`, `feedback`, `referrals`, `analytics_events`, `settings`, `audit_log`, and `rate_limits`.
 
-## Bootstrap the first administrator
+## Accounts and administrator access
 
-1. Generate a long one-time setup token locally. Do not commit it.
-2. In the Worker dashboard, open **Settings → Variables and Secrets → Add secret**. Name it `ADMIN_SETUP_TOKEN` and store the token.
-3. After the Worker is deployed, send a single `POST` to `https://<worker-origin>/api/v1/admin/setup` from the configured Pages origin. Supply JSON `{ "setup_token": "<token>", "email": "admin@example.com", "password": "<12+ character password>" }`, plus `Origin: <exact frontend origin>` and `X-Requested-With: Requva` headers. A `201` response sets the admin session cookie.
-4. Confirm the admin account can load `/api/v1/admin/summary`, then remove `ADMIN_SETUP_TOKEN` from Worker secrets and redeploy.
-5. Normal `/auth/register` stays closed until an admin exists. Further attempts to use bootstrap return `409`.
-
-Prefer a secure HTTP client that does not save request bodies or headers to shell history. Never paste the setup token into source control.
+Public account registration is enabled. New accounts receive the ordinary `user` role. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap token or setup endpoint is used.
 
 ## Local development
 

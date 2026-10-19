@@ -20,13 +20,36 @@ function str(value,max){if(typeof value!=='string')return '';return value.trim()
 function validUrl(value){try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password&&u.hostname.includes('.')}catch{return false}}
 async function audit(env,actor,action,type,target,metadata={}){await env.DB.prepare('INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),actor,action,type,target,JSON.stringify(metadata)).run()}
 async function rateLimit(request,env,scope,max=20,seconds=900){const ip=request.headers.get('CF-Connecting-IP')||'unknown';const key=await digest(`${scope}:${ip}`);const now=Math.floor(Date.now()/1000),start=now-now%seconds;await env.DB.prepare('INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,1) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN window_start=? THEN count+1 ELSE 1 END,window_start=?').bind(key,start,start,start).run();const row=await env.DB.prepare('SELECT count FROM rate_limits WHERE key=?').bind(key).first();if(row?.count>max)return false;await env.DB.prepare('DELETE FROM rate_limits WHERE window_start<?').bind(now-86400).run();return true}
+async function registerAccount(request,env){
+ if(!await rateLimit(request,env,'register',8,3600))return fail('Too many account attempts. Try again later.',429);
+ let data;try{data=await body(request)}catch(error){return fail(error.message||'Request body is invalid.')}
+ const email=str(data.email,254).toLowerCase(),password=typeof data.password==='string'?data.password:'';
+ if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))return fail('Enter a valid email address.');
+ if(password.length<12||password.length>128)return fail('Password must be 12 to 128 characters.');
+ const existing=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
+ if(existing)return fail('An account with that email already exists. Log in instead.',409);
+ const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10),token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;
+ try{
+  await env.DB.batch([
+   env.DB.prepare('INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES(?,?,?,?,?)').bind(id,email,password_hash,salt,referral_code),
+   env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),id,exp),
+   env.DB.prepare("INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,'{}')").bind(crypto.randomUUID(),id,'account.register','user',id)
+  ]);
+ }catch(error){
+  const message=String(error?.message||error);
+  console.error(JSON.stringify({level:'error',event:'account_registration_failed',stage:'d1_batch',message}));
+  if(/UNIQUE constraint failed: users\.email/i.test(message))return fail('An account with that email already exists. Log in instead.',409);
+  return fail('Account creation is temporarily unavailable. Please try again in a moment.',503);
+ }
+ return json({user:{id,email,role:'user',referral_code}},201,{'Set-Cookie':setCookie(token,SESSION_SECONDS)});
+}
 async function userFrom(request,env){const raw=getCookie(request,'requva_session');if(!raw)return null;const hash=await digest(raw);const row=await env.DB.prepare('SELECT u.id,u.email,u.role,u.referral_code FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(hash,Math.floor(Date.now()/1000)).first();return row||null}
 async function requireUser(request,env){const user=await userFrom(request,env);return user||false}
 async function ownsProduct(env,userId,productId){return await env.DB.prepare('SELECT id FROM products WHERE id=? AND owner_id=?').bind(productId,userId).first()}
 async function route(request,env){if(!env.DB)return fail('Database is not configured.',503);const url=new URL(request.url),path=url.pathname.replace(/\/$/,'')||'/',method=request.method;
  if(path==='/api/v1/health'&&method==='GET')return json({ok:true,service:'requva-api',aiEnabled:env.AI_ENABLED==='true'});
  if(path==='/api/v1/discover/products'&&method==='GET'){const rows=await env.DB.prepare("SELECT id,name,url,description,stage,created_at FROM products WHERE status='active' ORDER BY created_at DESC LIMIT 100").all();return json({products:rows.results||[]})}
- if(path==='/api/v1/auth/register'&&method==='POST'){if(!await rateLimit(request,env,'register',8,3600))return fail('Too many account attempts. Try again later.',429);const data=await body(request);const email=str(data.email,254).toLowerCase(),password=typeof data.password==='string'?data.password:'';if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return fail('Enter a valid email address.');if(password.length<12||password.length>128)return fail('Password must be 12 to 128 characters.');const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10);try{await env.DB.prepare('INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES(?,?,?,?,?)').bind(id,email,password_hash,salt,referral_code).run()}catch{return fail('An account with that email may already exist.',409)}await audit(env,id,'account.register','user',id);const token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;await env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),id,exp).run();return json({user:{id,email,role:'user',referral_code}},201,{'Set-Cookie':setCookie(token,SESSION_SECONDS)})}
+ if(path==='/api/v1/auth/register'&&method==='POST')return await registerAccount(request,env);
  if(path==='/api/v1/auth/login'&&method==='POST'){if(!await rateLimit(request,env,'login',12,900))return fail('Too many login attempts. Try again later.',429);const data=await body(request),email=str(data.email,254).toLowerCase(),password=typeof data.password==='string'?data.password:'';const account=await env.DB.prepare('SELECT id,email,role,referral_code,password_hash,password_salt FROM users WHERE email=?').bind(email).first();if(!account||!same(await hashPassword(password,account.password_salt),account.password_hash))return fail('Email or password is incorrect.',401);const token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;await env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),account.id,exp).run();await audit(env,account.id,'account.login','user',account.id);return json({user:{id:account.id,email:account.email,role:account.role,referral_code:account.referral_code}},200,{'Set-Cookie':setCookie(token,SESSION_SECONDS)})}
  if(path==='/api/v1/auth/logout'&&method==='POST'){const raw=getCookie(request,'requva_session');if(raw)await env.DB.prepare('DELETE FROM sessions WHERE id_hash=?').bind(await digest(raw)).run();return json({ok:true},200,{'Set-Cookie':setCookie('',0)})}
  const user=await requireUser(request,env);if(!user)return fail('Sign in to continue.',401);

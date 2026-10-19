@@ -76,3 +76,5 @@ body[data-page="admin"] #admin-panel[hidden]{display:none!important}
 }
 
 body:not([data-page="home"]) #primary-nav [data-page-link="home"]{display:none!important}.topbar nav a[aria-current="page"]{font-weight:700;color:#526e28}
+
+body:not([data-page="home"]) .ticker,body:not([data-page="home"]) .cta-band{display:none!important}

@@ -50,7 +50,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');assert.equal((await payload(r)).passwordHashIterations,100000);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,3);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);

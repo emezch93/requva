@@ -2,22 +2,29 @@
 
 ## Current controls
 
-- Passwords are salted, PBKDF2-HMAC-SHA-256 derived hashes (120,000 rounds); plaintext passwords are never stored. Sessions use random 256-bit tokens, persist only SHA-256 hashes, expire after seven days, and are sent in `Secure; HttpOnly; SameSite=None` cookies for the separate Pages/Workers origins.
-- State-changing browser requests require the exact configured `Origin` and `X-Requested-With: Requva`. Credentialed CORS is allowlisted to one `FRONTEND_ORIGIN`; responses receive security headers and no-store caching.
-- SQL uses bound parameters. Products and campaigns require owner checks. Admin endpoints require the `admin` role. Feedback requires an active opt-in and explicit sharing consent.
-- Login, registration, and password-recovery attempts are rate-limited in D1. Client IPs are hashed before the rate-limit key is saved. Registration stores the user, session, salted recovery-answer hash, and audit entry in one D1 batch. Submitted product URLs are validated and stored, never fetched; this avoids URL-fetch SSRF.
-- Audit entries cover account, product, campaign, feedback, and settings actions. Error bodies do not contain exception details.
+- Passwords are salted PBKDF2-HMAC-SHA-256 hashes with 100,000 iterations. Cloudflare Workers Web Crypto supports up to 100,000 PBKDF2 iterations. Session tokens are random, only their SHA-256 hashes are stored, and sessions expire after seven days.
+- Session cookies are `Secure`, `HttpOnly`, and `SameSite=None` for the current separate Pages and Workers hosts. State-changing browser requests require the configured exact origin and `X-Requested-With: Requva`; credentialed CORS is allowlisted.
+- SQL is parameterized. Product/campaign writes use ownership checks. Admin APIs require an explicit `admin` role. Product creation, campaign creation, tester joins, and consent feedback combine primary writes and audit entries in D1 batches.
+- Signup, login, password reset, and product changes have D1 rate limits. Password reset uses a salted, hashed security answer and revokes every session on success.
+- Gemini is called only by the Worker using `env.GEMINI_API_KEY` in the `x-goog-api-key` header. The key is not returned, logged, or exposed to frontend code. Requests use output schemas, a timeout, bounded inputs, user quotas, and safe error messages. AI feature inputs are user-supplied and treated as untrusted.
+- Product tracking tokens are random per-product credentials stored as hashes. Event ingestion accepts only supported event names and idempotency keys; the token binds events to an existing product.
+- Submitted product URLs are validated and stored, never fetched, preventing URL-fetch SSRF. Campaign plans are marked manual and never reported as externally published.
+- Responses use no-store caching and security headers; logs avoid passwords, tokens, and the Gemini secret.
 
-## Secrets and configuration
+## Admin setup
 
-- Never commit `.dev.vars`, Worker secrets, API keys, passwords, session tokens, or bootstrap values.
-- Public signups receive only the ordinary `user` role; admin endpoints still require the `admin` role.
-- If a future Gemini integration is added, it must remain disabled by default, keep its key in a Worker secret, enforce quotas, and expose errors safely. Gemini is not currently integrated.
-- `FRONTEND_ORIGIN` is a non-secret exact origin. Keep it in the Worker configuration and review it on every domain change.
+There is no public bootstrap route. First create your own account, then use Cloudflare D1 Console to promote that exact trusted account:
 
-## Operational hardening before public launch
+```sql
+UPDATE users SET role = 'admin' WHERE email = 'you@example.com';
+```
 
-This repository is an initial product implementation, not a security certification. Before broad public use, configure Cloudflare WAF/bot controls and alerting, choose a backup/retention policy, test account recovery and data deletion procedures, review applicable privacy/consumer laws, and add monitoring for rate-limit abuse and D1 errors. Password recovery uses the account email plus a selected security question and answer. The answer is salted and hashed, reset attempts are rate-limited, incorrect answers receive a generic response, and a successful reset revokes every active session. Security questions are weaker than a one-time email link because answers can be guessed or learned; users should choose a private answer that is not publicly discoverable. The app does not send recovery emails, verify email ownership, provide MFA, or include built-in abuse-report moderation. Do not promise those controls to users. Password changes are available from account settings and revoke other active sessions.
+Check the affected row and sign out/in to refresh the role in the session response. Never use a public signup token or grant admin based on an email domain.
 
-The D1 rate limiter is deliberately simple and consumes database writes. Review quotas and replace/tune it if traffic grows; do not add KV. Rotate sessions after credential changes when account settings are implemented.
+## Account recovery and deployment boundaries
 
+Security-question recovery is weaker than email-based one-time links because answers can be guessed or learned. Choose an answer that is private and not searchable. Requva does not verify email ownership, send reset emails, or provide MFA. The Pages `pages.dev` and Worker `workers.dev` domains are cross-site; some browsers restrict third-party cookies. A custom Pages and Worker domain under the same registrable domain is recommended for production login stability.
+
+## Operational limits
+
+These controls are not a security certification. Configure Cloudflare bot/WAF controls, backups, retention/deletion procedures, and alerts before broad public use. D1 rate limits write to the database and may need tuning as traffic grows. Monitor Worker logs for errors; never paste secrets into tickets or screenshots.

@@ -1,6 +1,6 @@
 # Testing and verification
 
-Run tests from `worker/`. The test suite uses Node's built-in test runner and SQLite to execute the production migration and exercise the Worker router without Cloudflare credentials.
+Run the full Worker API suite and syntax checks from the repository root:
 
 ```powershell
 cd worker
@@ -10,16 +10,16 @@ cd ..
 node --check frontend/app.js
 ```
 
-The tests cover API health, strict origin/custom-header checks, first-admin setup, password-based registration, session cookies, product creation, campaign planning, tester opt-in, consent-based feedback, analytics summaries, and admin authorization data. SQLite migration execution also checks that the initial schema applies cleanly.
+Tests use Node's built-in runner and in-memory SQLite with the actual migrations. They exercise registration at the Cloudflare-supported 100,000 PBKDF2 iteration count, login/session invalidation and security-question reset, product/campaign/tester/feedback flows, analytics idempotency, access/CSRF rules, and Gemini request handling with a fake local provider response. They do not call Google or Cloudflare services and use no production secrets.
 
-## Manual browser checks before launch
+## Production smoke checks
 
-1. Set the real API origin in `frontend/config.js` and the same exact Pages origin in Worker `FRONTEND_ORIGIN`.
-2. Create the first admin, remove the bootstrap secret, create a normal account, add and pause/archive a product, then create/update a manual campaign.
-3. In a second account, opt in to another active product and submit feedback with explicit consent. Confirm the owner sees only the feedback count and can fetch their product's feedback endpoint.
-4. Confirm unauthorized origins, missing CSRF headers, unauthenticated writes, and non-admin admin routes fail.
-5. Confirm analytics shows campaign and feedback actions only. Visit/signup/activation/retention counts stay zero until a real integration is implemented.
-6. Confirm the Pages site and the Worker each have successful, independent Git-triggered deployment records. Verify `/api/v1/health` on the deployed API.
+1. In Cloudflare Worker deployment history, verify the active version was built from the current `main` commit. A log saying PBKDF2 requested 120,000 means that version is stale; current source must use exactly `ITERATIONS = 100000`.
+2. Confirm D1 migrations 0001 and 0002 applied to the production database.
+3. Check `GET https://requva.emezch93.workers.dev/api/v1/health`; then check signup, login, logout, and session refresh from the Pages site.
+4. As a user, add a product, make a manual campaign, join a different active product as a tester, and send consent-based feedback.
+5. As an admin, check Gemini status. Add the Worker secret before testing AI; test connection and make one draft. Confirm the secret is never shown in the page or returned by the API.
+6. Create a tracking token and send a visit from a server. Repeat the same event key and confirm the count remains one.
+7. Verify Pages and Worker each have a successful, independent Cloudflare deployment. A successful Pages upload does not deploy the Worker.
 
-Never use real user or production data in local tests. Production deployment and third-party integration checks require the account owner's Cloudflare resources and actual provider credentials.
-
+Do not use real passwords, users, provider keys, or production data in local tests. A local test cannot verify browser third-party-cookie behavior or live Cloudflare deployment health.

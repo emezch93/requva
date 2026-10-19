@@ -11,7 +11,7 @@
 ## Secrets and configuration
 
 - Never commit `.dev.vars`, Worker secrets, API keys, passwords, session tokens, or bootstrap values.
-- Configure `ADMIN_SETUP_TOKEN` through the Cloudflare Worker secret manager only. It is a temporary bootstrap control; remove it after the first administrator exists.
+- Public signups receive only the ordinary `user` role; admin endpoints still require the `admin` role.
 - If a future Gemini integration is added, it must remain disabled by default, keep its key in a Worker secret, enforce quotas, and expose errors safely. Gemini is not currently integrated.
 - `FRONTEND_ORIGIN` is a non-secret exact origin. Keep it in the Worker configuration and review it on every domain change.
 

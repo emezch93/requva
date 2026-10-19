@@ -32,7 +32,7 @@ The expected tables include `users`, `sessions`, `products`, `campaigns`, `teste
 
 ## Accounts and administrator access
 
-Public account registration is enabled. New accounts receive the ordinary `user` role. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap token or setup endpoint is used.
+Public account registration is enabled in the Cloudflare Worker. The browser sends the form to the Worker; password hashing, account/session creation, and D1 writes happen server-side. User, session, recovery record, and audit row are saved as one D1 batch so a failed write does not leave a half-created account. New accounts receive the ordinary `user` role. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap token or setup endpoint is used. Recovery-question hashes are stored in reserved `settings` keys and hidden from the admin settings API. Existing accounts can set a recovery answer while signed in under Account settings.
 
 ## Local development
 

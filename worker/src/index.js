@@ -1,5 +1,5 @@
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
-const ITERATIONS = 120000;
+const ITERATIONS = 100000;
 const RECOVERY_QUESTIONS = new Set(['school','birth_city','favorite_book','remembered_teacher','private_phrase']);
 const CHANNELS = new Set(['LinkedIn','Facebook','Instagram','X','Reddit','TikTok','Pinterest','Email','Directories','Search discovery','Forums','Communities','Partnerships','Referrals','Affiliates']);
 const encoder = new TextEncoder();

@@ -1,6 +1,6 @@
 # D1 setup and schema
 
-The Worker has one D1 binding named `DB`. Migrations `0001_initial.sql` through `0003_distribution_workflows.sql` create users, sessions, products, campaigns, testers, feedback, referrals, analytics events, settings, audit records, SQL-backed rate-limit state, AI usage records, saved AI campaign plans, and hashed per-product tracking credentials, curated opportunities, distribution activities, testing requests, and product listing reports. Migration 0003 only adds columns and tables; it does not delete or reset existing data. No KV namespace or binding is used.
+The Worker has one D1 binding named `DB`. Migrations `0001_initial.sql` through `0004_operational_reporting.sql` create users, sessions, products, campaigns, testers, feedback, referrals, analytics events, settings, audit records, SQL-backed rate-limit state, AI usage records, saved AI campaign plans, and hashed per-product tracking credentials, curated opportunities, distribution activities, testing requests, and product listing reports. Migration 0003 only adds columns and tables; it does not delete or reset existing data. No KV namespace or binding is used.
 
 ## Create and bind the production database
 
@@ -28,7 +28,7 @@ npx wrangler d1 migrations list requva-production --remote
 npx wrangler d1 execute requva-production --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
 ```
 
-The expected tables include `users`, `sessions`, `products`, `campaigns`, `testers`, `feedback`, `referrals`, `analytics_events`, `settings`, `audit_log`, `rate_limits`, `ai_usage`, and `product_integrations`, plus `distribution_opportunities`, `distribution_activities`, `testing_requests`, and `product_reports`. Migration 0002 adds `campaigns.plan_json`; migration 0003 adds product audience fields, listing moderation, request-scoped tester consent and participation milestones, and the distribution workflow tables. Both are additive and should not be edited after applying.
+The expected tables include `users`, `sessions`, `products`, `campaigns`, `testers`, `feedback`, `referrals`, `analytics_events`, `settings`, `audit_log`, `rate_limits`, `ai_usage`, and `product_integrations`, plus `distribution_opportunities`, `distribution_activities`, `testing_requests`, and `product_reports`. Migration 0002 adds `campaigns.plan_json`; migration 0003 adds product audience fields, listing moderation, request-scoped tester consent and participation milestones, and the distribution workflow tables. Migration 0004 adds campaign completion evidence and removes campaign-activity events that were incorrectly recorded when plans were created. Campaign plans and other records are preserved. Apply new migrations with Wrangler; do not edit migrations already applied.
 
 ## Accounts and administrator access
 

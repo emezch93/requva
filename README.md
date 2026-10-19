@@ -2,32 +2,32 @@
 
 **Reach the right people. Grow with real users.**
 
-Requva is a product discovery, distribution planning, and opt-in tester workspace. The repository separates a static HTML/CSS/JavaScript frontend (`frontend/`) from a Cloudflare Worker API (`worker/`) backed by Cloudflare D1.
+Requva is a product discovery and tester feedback workspace. Its static frontend lives in `frontend/`; the API is a Cloudflare Worker in `worker/`, with Cloudflare D1 storage.
 
-## What works
+## What the app does
 
-- Product accounts with password-based registration/login, expiring HTTP-only sessions, ownership checks, and status management.
-- Product listings, deterministic audience prompts based only on submitted descriptions, manual campaign plans, status history, opt-in tester records, and consent-based feedback.
-- Analytics counters for campaign actions and submitted feedback. Visits, signups, activation, and retention remain zero until a verified server-side measurement integration records them.
-- Administrator bootstrap via a one-time Cloudflare Worker secret, role-gated summary/user/campaign/audit/settings endpoints.
-- Prepared Git integration paths for Pages and Workers. Source commits trigger independent deploys after you connect both Cloudflare projects.
+- Account signup/login, seven-day secure sessions, password changes, and password reset with a security question.
+- Product management and public tester discovery, opt-in tester records, consent-based feedback, and referral records.
+- Manual campaign planning and status tracking. Requva does not post, email, or contact audiences.
+- Product activity counts from Requva records. Visits, signups, activation, and retention are counted only when a product owner sends authenticated events from their own server.
+- Optional Gemini assistance for product audience analysis, saved campaign drafts, feedback summaries, and growth suggestions. The API key stays in a Cloudflare Worker secret. AI output is a draft based on submitted information; it is not live research or a verified result.
 
-No social platform APIs are connected. Requva never publishes content, contacts people, fetches submitted URLs, or claims an acquisition result. Keyword audience notes are prompts, not external research. Gemini is not implemented and remains disabled.
+Public signups receive the ordinary `user` role. To enable admin-only settings, an owner manually promotes a trusted account in D1; there is no public administrator bootstrap endpoint.
 
-## Quick start
+## Deploy and configure
 
-1. Follow [DEPLOYMENT.md](docs/DEPLOYMENT.md) to connect GitHub to Cloudflare Pages and Workers Builds.
-2. Follow [DATABASE.md](docs/DATABASE.md) to create D1, configure `database_id`, and apply migrations.
-3. Set the exact frontend origin on the Worker and configure `frontend/config.js` with the deployed Worker origin.
-4. Set `ADMIN_SETUP_TOKEN` as a Worker secret, perform the first-admin setup, then remove that bootstrap secret.
-5. Use [TESTING.md](docs/TESTING.md) for local checks and the end-to-end smoke test.
+1. Follow [deployment](docs/DEPLOYMENT.md) and confirm the deployed Worker source commit.
+2. Follow [database setup](docs/DATABASE.md) and apply all migrations.
+3. In Cloudflare, add the Worker secret `GEMINI_API_KEY` if you want AI features. The secret is never stored in this repository or sent to the browser.
+4. Run the checks in [testing](docs/TESTING.md), then follow [integration instructions](docs/INTEGRATIONS.md).
+
+## Limits to understand
+
+Requva currently has no social network publishing, mailing, paid acquisition, automatic website crawling, email verification, or email-based account recovery. Security-question recovery is weaker than an emailed one-time reset link. Requva cannot promise reach, user acquisition, conversion, or retention from a saved plan.
 
 ## Repository map
 
-- `frontend/` — static responsive website, assets, and browser API client. No installable manifest or service worker.
-- `worker/src/index.js` — `/api/v1` API.
-- `worker/migrations/` — versioned D1 schema.
-- `docs/` — deployment, database, security, integration, testing, and maintenance guides.
-
-See [INTEGRATIONS.md](docs/INTEGRATIONS.md) for exact channel support and [SECURITY.md](docs/SECURITY.md) for the current security model and operational requirements.
-
+- `frontend/` — static, responsive user interface.
+- `worker/src/index.js` — Worker API and server-side Gemini requests.
+- `worker/migrations/` — additive D1 schema migrations.
+- `docs/` — deployment, database, integration, security, and testing notes.

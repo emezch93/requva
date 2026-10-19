@@ -5,6 +5,5 @@
   "compatibility_date": "2026-10-19",
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "vars": { "FRONTEND_ORIGIN": "https://requva.pages.dev", "APP_ENV": "production", "AI_ENABLED": "false" },
-  "d1_databases": [{ "binding": "DB", "database_name": "requva-production", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "requva-production", "database_id": "376f8955-0480-47be-b60e-5280f8ed1dba", "migrations_dir": "migrations" }]
 }
-

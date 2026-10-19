@@ -3,7 +3,7 @@
   "name": "requva",
   "main": "src/index.js",
   "compatibility_date": "2026-10-19",
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
-  "vars": { "FRONTEND_ORIGIN": "https://requva.pages.dev", "APP_ENV": "production", "AI_ENABLED": "false" },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": true } },
+  "vars": { "FRONTEND_ORIGIN": "https://requva.pages.dev", "APP_ENV": "production", "AI_ENABLED": "true", "AI_DAILY_LIMIT": "10", "GEMINI_FAST_MODEL": "gemini-3.5-flash-lite", "GEMINI_REASONING_MODEL": "gemini-3.8-flash" },
   "d1_databases": [{ "binding": "DB", "database_name": "requva-production", "database_id": "376f8955-0480-47be-b60e-5280f8ed1dba", "migrations_dir": "migrations" }]
 }

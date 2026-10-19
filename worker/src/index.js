@@ -1,5 +1,6 @@
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 const ITERATIONS = 120000;
+const RECOVERY_QUESTIONS = new Set(['school','birth_city','favorite_book','remembered_teacher','private_phrase']);
 const CHANNELS = new Set(['LinkedIn','Facebook','Instagram','X','Reddit','TikTok','Pinterest','Email','Directories','Search discovery','Forums','Communities','Partnerships','Referrals','Affiliates']);
 const encoder = new TextEncoder();
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',...headers}});
@@ -27,18 +28,20 @@ async function registerAccount(request,env){
   stage='validate';
   let data;try{data=await body(request)}catch(error){return fail(error.message||'Request body is invalid.')}
   email=str(data.email,254).toLowerCase();
-  const password=typeof data.password==='string'?data.password:'';
+  const password=typeof data.password==='string'?data.password:'',question=str(data.recovery_question,40),answer=typeof data.recovery_answer==='string'?data.recovery_answer.trim().normalize('NFKC').toLowerCase():'';
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return fail('Enter a valid email address.');
   if(password.length<12||password.length>128)return fail('Password must be 12 to 128 characters.');
+  if(!RECOVERY_QUESTIONS.has(question)||answer.length<12||answer.length>256)return fail('Choose a recovery question and use an answer between 12 and 256 characters.');
   stage='check_existing_account';
   const existing=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
   if(existing)return fail('An account with that email already exists. Log in instead.',409);
   stage='prepare_account';
-  const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10),token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;
-  stage='save_account_session_and_audit';
+  const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10),answer_salt=randomToken(16),answer_hash=await hashPassword(answer,answer_salt),token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;
+  stage='save_account_session_recovery_and_audit';
   await env.DB.batch([
    env.DB.prepare('INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES(?,?,?,?,?)').bind(id,email,password_hash,salt,referral_code),
    env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),id,exp),
+   env.DB.prepare("INSERT INTO settings(key,value_json,updated_by) VALUES(?,?,?)").bind('account_recovery.'+id,JSON.stringify({question,answer_salt,answer_hash}),id),
    env.DB.prepare("INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,'{}')").bind(crypto.randomUUID(),id,'account.register','user',id)
   ]);
   return json({user:{id,email,role:'user',referral_code}},201,{'Set-Cookie':setCookie(token,SESSION_SECONDS)});
@@ -49,6 +52,35 @@ async function registerAccount(request,env){
   return fail('Account creation is temporarily unavailable. Please try again in a moment.',503);
  }
 }
+async function resetPassword(request,env){
+ let stage='rate_limit',email='';
+ try{
+  let data;try{data=await body(request)}catch(error){return fail(error.message||'Request body is invalid.')}
+  email=str(data.email,254).toLowerCase();
+  if(!await rateLimit(request,env,'password_reset:'+email,5,900))return fail('Too many reset attempts. Try again later.',429);
+  const question=str(data.recovery_question,40),answer=typeof data.recovery_answer==='string'?data.recovery_answer.trim().normalize('NFKC').toLowerCase():'',newPassword=typeof data.new_password==='string'?data.new_password:'';
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!RECOVERY_QUESTIONS.has(question)||answer.length<12||answer.length>256||newPassword.length<12||newPassword.length>128)return fail('Check your details. Passwords must be 12 to 128 characters and recovery answers 12 to 256 characters.');
+  stage='verify_recovery';
+  const user=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
+  const recovery=user?await env.DB.prepare('SELECT value_json FROM settings WHERE key=?').bind('account_recovery.'+user.id).first():null;
+  let saved=null;try{saved=recovery?JSON.parse(recovery.value_json):null}catch{}
+  const answerSalt=saved?.answer_salt||randomToken(16),candidate=await hashPassword(answer,answerSalt);
+  if(!user||!saved||saved.question!==question||!same(candidate,saved.answer_hash||''))return fail('Email or recovery answer is incorrect, or recovery has not been set up.',401);
+  stage='prepare_password_reset';
+  const salt=randomToken(16),password_hash=await hashPassword(newPassword,salt);
+  stage='save_password_reset';
+  await env.DB.batch([
+   env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(password_hash,salt,user.id),
+   env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(user.id),
+   env.DB.prepare("INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,'{}')").bind(crypto.randomUUID(),user.id,'account.password_reset','user',user.id)
+  ]);
+  return json({ok:true,message:'Password reset. Please log in with your new password.'});
+ }catch(error){
+  console.error(JSON.stringify({level:'error',event:'password_reset_failed',stage,message:String(error?.message||error)}));
+  return fail('Password reset is temporarily unavailable. Please try again in a moment.',503);
+ }
+}
+
 
 async function userFrom(request,env){const raw=getCookie(request,'requva_session');if(!raw)return null;const hash=await digest(raw);const row=await env.DB.prepare('SELECT u.id,u.email,u.role,u.referral_code FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(hash,Math.floor(Date.now()/1000)).first();return row||null}
 async function requireUser(request,env){const user=await userFrom(request,env);return user||false}
@@ -57,9 +89,22 @@ async function route(request,env){if(!env.DB)return fail('Database is not config
  if(path==='/api/v1/health'&&method==='GET')return json({ok:true,service:'requva-api',aiEnabled:env.AI_ENABLED==='true'});
  if(path==='/api/v1/discover/products'&&method==='GET'){const rows=await env.DB.prepare("SELECT id,name,url,description,stage,created_at FROM products WHERE status='active' ORDER BY created_at DESC LIMIT 100").all();return json({products:rows.results||[]})}
  if(path==='/api/v1/auth/register'&&method==='POST')return await registerAccount(request,env);
+ if(path==='/api/v1/auth/reset'&&method==='POST')return await resetPassword(request,env);
  if(path==='/api/v1/auth/login'&&method==='POST'){if(!await rateLimit(request,env,'login',12,900))return fail('Too many login attempts. Try again later.',429);const data=await body(request),email=str(data.email,254).toLowerCase(),password=typeof data.password==='string'?data.password:'';const account=await env.DB.prepare('SELECT id,email,role,referral_code,password_hash,password_salt FROM users WHERE email=?').bind(email).first();if(!account||!same(await hashPassword(password,account.password_salt),account.password_hash))return fail('Email or password is incorrect.',401);const token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;await env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),account.id,exp).run();await audit(env,account.id,'account.login','user',account.id);return json({user:{id:account.id,email:account.email,role:account.role,referral_code:account.referral_code}},200,{'Set-Cookie':setCookie(token,SESSION_SECONDS)})}
  if(path==='/api/v1/auth/logout'&&method==='POST'){const raw=getCookie(request,'requva_session');if(raw)await env.DB.prepare('DELETE FROM sessions WHERE id_hash=?').bind(await digest(raw)).run();return json({ok:true},200,{'Set-Cookie':setCookie('',0)})}
  const user=await requireUser(request,env);if(!user)return fail('Sign in to continue.',401);
+ if(path==='/api/v1/auth/recovery/setup'&&method==='POST'){
+  const d=await body(request),currentPassword=typeof d.current_password==='string'?d.current_password:'',question=str(d.recovery_question,40),answer=typeof d.recovery_answer==='string'?d.recovery_answer.trim().normalize('NFKC').toLowerCase():'';
+  if(!RECOVERY_QUESTIONS.has(question)||answer.length<12||answer.length>256)return fail('Choose a recovery question and use an answer between 12 and 256 characters.');
+  const account=await env.DB.prepare('SELECT password_hash,password_salt FROM users WHERE id=?').bind(user.id).first();
+  if(!account||!same(await hashPassword(currentPassword,account.password_salt),account.password_hash))return fail('Current password is incorrect.',403);
+  const answer_salt=randomToken(16),answer_hash=await hashPassword(answer,answer_salt);
+  await env.DB.batch([
+   env.DB.prepare("INSERT INTO settings(key,value_json,updated_by) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_by=excluded.updated_by,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')").bind('account_recovery.'+user.id,JSON.stringify({question,answer_salt,answer_hash}),user.id),
+   env.DB.prepare("INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,'{}')").bind(crypto.randomUUID(),user.id,'account.recovery_setup','user',user.id)
+  ]);
+  return json({ok:true});
+ }
  if(path==='/api/v1/auth/password'&&method==='POST'){const d=await body(request),oldPassword=typeof d.current_password==='string'?d.current_password:'',newPassword=typeof d.new_password==='string'?d.new_password:'';const account=await env.DB.prepare('SELECT password_hash,password_salt FROM users WHERE id=?').bind(user.id).first();if(!account||!same(await hashPassword(oldPassword,account.password_salt),account.password_hash))return fail('Current password is incorrect.',403);if(newPassword.length<12||newPassword.length>128)return fail('New password must be 12 to 128 characters.');const salt=randomToken(16),hash=await hashPassword(newPassword,salt);await env.DB.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').bind(hash,salt,user.id).run();await env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(user.id).run();const token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;await env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),user.id,exp).run();await audit(env,user.id,'account.password_change','user',user.id);return json({ok:true},200,{'Set-Cookie':setCookie(token,SESSION_SECONDS)})}
  if(path==='/api/v1/auth/me'&&method==='GET')return json({user});
  if(path.startsWith('/api/v1/admin/')){if(user.role!=='admin')return fail('Administrator access required.',403);if(path==='/api/v1/admin/summary'&&method==='GET'){const stats=await env.DB.prepare('SELECT (SELECT COUNT(*) FROM users) users,(SELECT COUNT(*) FROM products) products,(SELECT COUNT(*) FROM campaigns) campaigns,(SELECT COUNT(*) FROM feedback) feedback').first();return json(stats)}if(path==='/api/v1/admin/products'&&method==='GET'){const rows=await env.DB.prepare('SELECT p.id,p.name,p.url,p.status,p.created_at,u.email owner_email FROM products p JOIN users u ON u.id=p.owner_id ORDER BY p.created_at DESC LIMIT 200').all();return json({products:rows.results||[]})}const adminProduct=path.match(/^\/api\/v1\/admin\/products\/([\w-]+)$/);if(adminProduct&&method==='PATCH'){const d=await body(request),status=['active','paused','archived'].includes(d.status)?d.status:null;if(!status)return fail('Invalid product status.');const result=await env.DB.prepare("UPDATE products SET status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").bind(status,adminProduct[1]).run();if(result.meta?.changes!==1)return fail('Product not found.',404);await audit(env,user.id,'admin.product_status','product',adminProduct[1],{status});return json({ok:true})}const adminCampaign=path.match(/^\/api\/v1\/admin\/campaigns\/([\w-]+)$/);if(adminCampaign&&method==='PATCH'){const d=await body(request),status=['planned','in_progress','completed','cancelled'].includes(d.status)?d.status:null;if(!status)return fail('Invalid campaign status.');const result=await env.DB.prepare('UPDATE campaigns SET status=? WHERE id=?').bind(status,adminCampaign[1]).run();if(result.meta?.changes!==1)return fail('Campaign not found.',404);await audit(env,user.id,'admin.campaign_status','campaign',adminCampaign[1],{status});return json({ok:true})}if(path==='/api/v1/admin/reports'&&method==='GET'){const rows=await env.DB.prepare('SELECT action,target_type,COUNT(*) AS count,MAX(created_at) AS latest FROM audit_log GROUP BY action,target_type ORDER BY latest DESC LIMIT 100').all();return json({reports:rows.results||[]})}if(path==='/api/v1/admin/users'&&method==='GET'){const rows=await env.DB.prepare('SELECT id,email,role,created_at FROM users ORDER BY created_at DESC LIMIT 200').all();return json({users:rows.results||[]})}if(path==='/api/v1/admin/campaigns'&&method==='GET'){const rows=await env.DB.prepare('SELECT c.id,c.channel,c.status,c.execution_mode,c.created_at,p.name product_name,u.email owner_email FROM campaigns c JOIN products p ON p.id=c.product_id JOIN users u ON u.id=c.owner_id ORDER BY c.created_at DESC LIMIT 200').all();return json({campaigns:rows.results||[]})}if(path==='/api/v1/admin/audit'&&method==='GET'){const rows=await env.DB.prepare('SELECT id,actor_id,action,target_type,target_id,metadata_json,created_at FROM audit_log ORDER BY created_at DESC LIMIT 200').all();return json({events:rows.results||[]})}if(path==='/api/v1/admin/settings'&&method==='GET'){const rows=await env.DB.prepare('SELECT key,value_json,updated_at FROM settings ORDER BY key').all();return json({settings:rows.results||[]})}if(path==='/api/v1/admin/settings'&&method==='POST'){const d=await body(request),key=str(d.key,100);if(!/^[a-z0-9_.-]+$/.test(key)||typeof d.value!=='object'||d.value===null)return fail('Invalid setting.');await env.DB.prepare("INSERT INTO settings(key,value_json,updated_by) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_by=excluded.updated_by,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')").bind(key,JSON.stringify(d.value),user.id).run();await audit(env,user.id,'setting.update','setting',key);return json({ok:true})}return fail('Admin route not found.',404)}

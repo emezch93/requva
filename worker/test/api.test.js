@@ -82,6 +82,9 @@ test('campaign plans stay out of activity totals until an evidenced owner report
  r=await call(DB,'/campaigns',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn from relevant users'}});
  assert.equal(r.status,201);const campaign=(await payload(r)).campaign;
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,0,'a saved plan is not executed work');
+ DB.sql.prepare("INSERT INTO analytics_events(id,owner_id,product_id,event_type,source) VALUES(?,?,?,'campaign_activity','manual')").run(crypto.randomUUID(),owner.user.id,product.id);
+ const legacy=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(legacy)).campaignActivity,0,'legacy plan events remain stored but are excluded from execution totals');
+ assert.equal(DB.sql.prepare("SELECT COUNT(*) AS n FROM analytics_events WHERE event_type='campaign_activity'").get().n,1,'legacy record is preserved');
  r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,409,'campaign must be started before completion');
  r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'in_progress'}});assert.equal(r.status,200);
  r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,400,'completion needs evidence');

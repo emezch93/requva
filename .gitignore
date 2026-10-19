@@ -1,0 +1,12 @@
+node_modules/
+worker/node_modules/
+worker/.dev.vars
+worker/.wrangler/
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+

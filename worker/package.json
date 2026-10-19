@@ -1,0 +1,19 @@
+{
+  "name": "requva-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test",
+    "db:local": "wrangler d1 migrations apply requva-production --local",
+    "db:remote": "wrangler d1 migrations apply requva-production --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.50.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+

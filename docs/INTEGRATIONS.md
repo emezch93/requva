@@ -37,7 +37,7 @@ Supported event types are `visit`, `signup`, `activation`, and `retention`. Each
 
 ## What is not integrated
 
-Campaign plans are drafts for a person to review and publish themselves. Requva does not contact customers, publish messages, sign into social sites, or scrape web communities. Gemini suggestions are unverified hypotheses and may be wrong; verify claims before using them. Feedback analysis redacts common email addresses and phone numbers, but do not submit sensitive personal or health information.
+Campaign plans are drafts for a person to review and publish themselves. Saving a plan does not count as an action. Owners must report a completed manual campaign with a note or result link; this is labeled owner-reported and is not independently verified. Requva does not contact customers, publish messages, sign into social sites, or scrape web communities. Gemini suggestions are unverified hypotheses and may be wrong; verify claims before using them. Feedback analysis redacts common email addresses and phone numbers, but do not submit sensitive personal or health information.
 
 Review each provider's current terms, consent rules, quotas, and costs before adding more integrations.
 

@@ -21,28 +21,35 @@ function validUrl(value){try{const u=new URL(value);return ['https:','http:'].in
 async function audit(env,actor,action,type,target,metadata={}){await env.DB.prepare('INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,?)').bind(crypto.randomUUID(),actor,action,type,target,JSON.stringify(metadata)).run()}
 async function rateLimit(request,env,scope,max=20,seconds=900){const ip=request.headers.get('CF-Connecting-IP')||'unknown';const key=await digest(`${scope}:${ip}`);const now=Math.floor(Date.now()/1000),start=now-now%seconds;await env.DB.prepare('INSERT INTO rate_limits(key,window_start,count) VALUES(?,?,1) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN window_start=? THEN count+1 ELSE 1 END,window_start=?').bind(key,start,start,start).run();const row=await env.DB.prepare('SELECT count FROM rate_limits WHERE key=?').bind(key).first();if(row?.count>max)return false;await env.DB.prepare('DELETE FROM rate_limits WHERE window_start<?').bind(now-86400).run();return true}
 async function registerAccount(request,env){
- if(!await rateLimit(request,env,'register',8,3600))return fail('Too many account attempts. Try again later.',429);
- let data;try{data=await body(request)}catch(error){return fail(error.message||'Request body is invalid.')}
- const email=str(data.email,254).toLowerCase(),password=typeof data.password==='string'?data.password:'';
- if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))return fail('Enter a valid email address.');
- if(password.length<12||password.length>128)return fail('Password must be 12 to 128 characters.');
- const existing=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
- if(existing)return fail('An account with that email already exists. Log in instead.',409);
- const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10),token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;
+ let stage='rate_limit',email='';
  try{
+  if(!await rateLimit(request,env,'register',8,3600))return fail('Too many account attempts. Try again later.',429);
+  stage='validate';
+  let data;try{data=await body(request)}catch(error){return fail(error.message||'Request body is invalid.')}
+  email=str(data.email,254).toLowerCase();
+  const password=typeof data.password==='string'?data.password:'';
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return fail('Enter a valid email address.');
+  if(password.length<12||password.length>128)return fail('Password must be 12 to 128 characters.');
+  stage='check_existing_account';
+  const existing=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind(email).first();
+  if(existing)return fail('An account with that email already exists. Log in instead.',409);
+  stage='prepare_account';
+  const id=crypto.randomUUID(),salt=randomToken(16),password_hash=await hashPassword(password,salt),referral_code=randomToken(10),token=randomToken(),exp=Math.floor(Date.now()/1000)+SESSION_SECONDS;
+  stage='save_account_session_and_audit';
   await env.DB.batch([
    env.DB.prepare('INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES(?,?,?,?,?)').bind(id,email,password_hash,salt,referral_code),
    env.DB.prepare('INSERT INTO sessions(id_hash,user_id,expires_at) VALUES(?,?,?)').bind(await digest(token),id,exp),
    env.DB.prepare("INSERT INTO audit_log(id,actor_id,action,target_type,target_id,metadata_json) VALUES(?,?,?,?,?,'{}')").bind(crypto.randomUUID(),id,'account.register','user',id)
   ]);
+  return json({user:{id,email,role:'user',referral_code}},201,{'Set-Cookie':setCookie(token,SESSION_SECONDS)});
  }catch(error){
   const message=String(error?.message||error);
-  console.error(JSON.stringify({level:'error',event:'account_registration_failed',stage:'d1_batch',message}));
+  console.error(JSON.stringify({level:'error',event:'account_registration_failed',stage,message}));
   if(/UNIQUE constraint failed: users\.email/i.test(message))return fail('An account with that email already exists. Log in instead.',409);
   return fail('Account creation is temporarily unavailable. Please try again in a moment.',503);
  }
- return json({user:{id,email,role:'user',referral_code}},201,{'Set-Cookie':setCookie(token,SESSION_SECONDS)});
 }
+
 async function userFrom(request,env){const raw=getCookie(request,'requva_session');if(!raw)return null;const hash=await digest(raw);const row=await env.DB.prepare('SELECT u.id,u.email,u.role,u.referral_code FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=? AND s.expires_at>?').bind(hash,Math.floor(Date.now()/1000)).first();return row||null}
 async function requireUser(request,env){const user=await userFrom(request,env);return user||false}
 async function ownsProduct(env,userId,productId){return await env.DB.prepare('SELECT id FROM products WHERE id=? AND owner_id=?').bind(productId,userId).first()}

@@ -42,9 +42,9 @@ Edit `frontend/config.js` and replace `https://requva-api.example.workers.dev` w
 
 In the Worker settings, set `FRONTEND_ORIGIN` to the exact Pages origin, such as `https://requva.pages.dev` (no trailing slash). For a custom domain, use its exact `https://` origin. Commit the matching `vars.FRONTEND_ORIGIN` in `worker/wrangler.jsonc` and redeploy. Preview Pages origins will not pass this production allowlist; configure a separate preview Worker environment before testing preview auth flows.
 
-## 6. Secret and initial administrator
+## 6. Accounts
 
-Follow [DATABASE.md](DATABASE.md). Before public registration can work, create the first admin with `ADMIN_SETUP_TOKEN`. Remove that secret after bootstrap. Never place the token in `frontend/config.js`, GitHub Actions, or a committed file.
+Public account registration is enabled. New accounts receive the ordinary `user` role. Admin-only routes remain restricted to accounts explicitly assigned the `admin` role; no bootstrap secret is needed.
 
 ## 7. Verify independent deployments
 

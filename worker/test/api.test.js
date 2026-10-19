@@ -10,6 +10,7 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0002_ai_campaigns_and_tracking.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0003_distribution_workflows.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0004_operational_reporting.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -50,7 +51,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,3);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,4);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -68,9 +69,41 @@ test('Gemini stays server-side, uses the configured key, and records usage',asyn
   const r=await call(DB,'/ai/product-analysis',{method:'POST',headers:{Cookie:user.cookie},body:{product_id:product.id},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'test-secret-not-returned',GEMINI_FAST_MODEL:'gemini-3.5-flash-lite',GEMINI_REASONING_MODEL:'gemini-3.8-flash'}});
   assert.equal(r.status,200,await r.clone().text());const result=await payload(r);assert.equal(result.result.summary,expected.summary);assert.equal(sentKey,'test-secret-not-returned');assert.equal(JSON.stringify(result).includes('test-secret-not-returned'),false);
   const usage=DB.sql.prepare('SELECT outcome,feature FROM ai_usage').get();assert.equal(usage.outcome,'success');assert.equal(usage.feature,'product_analysis');
+  const plan=await call(DB,'/ai/campaign-plan',{method:'POST',headers:{Cookie:user.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn from relevant users'},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'test-secret-not-returned',GEMINI_FAST_MODEL:'gemini-3.5-flash-lite',GEMINI_REASONING_MODEL:'gemini-3.8-flash'}});
+  assert.equal(plan.status,201,await plan.clone().text());assert.ok((await payload(plan)).campaign.id);
+  const stats=await call(DB,'/analytics/summary',{headers:{Cookie:user.cookie}});assert.equal((await payload(stats)).campaignActivity,0,'AI campaign plans are not completed distribution activity');
  }finally{globalThis.fetch=originalFetch;DB.close()}
 });
 
+test('campaign plans stay out of activity totals until an evidenced owner report',async()=>{
+ const DB=database(),owner=await signup(DB,'campaign-owner@example.com');
+ let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Workpad',url:'https://workpad.example',description:'A shared workspace for small teams',stage:'idea'}});
+ assert.equal(r.status,201);const product=(await payload(r)).product;
+ r=await call(DB,'/campaigns',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn from relevant users'}});
+ assert.equal(r.status,201);const campaign=(await payload(r)).campaign;
+ r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,0,'a saved plan is not executed work');
+ r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,409,'campaign must be started before completion');
+ r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'in_progress'}});assert.equal(r.status,200);
+ r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,400,'completion needs evidence');
+ r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed',completion_notes:'Read the community rules and submitted an approved product post.'}});assert.equal(r.status,200);
+ r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,1,'a reported action is counted once');
+ r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'in_progress'}});assert.equal(r.status,409,'a completed report is final');
+ r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,1);
+ DB.close();
+});
+test('owners can manage testing-request availability and cannot reopen expired requests',async()=>{
+ const DB=database(),owner=await signup(DB,'request-owner@example.com'),other=await signup(DB,'other-owner@example.com');
+ let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Testable',url:'https://testable.example',description:'A product looking for useful feedback'}});
+ const product=(await payload(r)).product;
+ const create=async(closes_at)=>{const data={product_id:product.id,tester_type:'Early users',instructions:'Try the signup flow.',feedback_questions:'What was confusing?',consent_terms:'Feedback will be shared with the founder.'};if(closes_at)data.closes_at=closes_at;const response=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:owner.cookie},body:data});assert.equal(response.status,201,await response.clone().text());return(await payload(response)).request.id};
+ const openId=await create();
+ r=await call(DB,'/testing/requests/'+openId,{method:'PATCH',headers:{Cookie:other.cookie},body:{status:'closed'}});assert.equal(r.status,404,'another owner cannot manage this request');
+ r=await call(DB,'/testing/requests/'+openId,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'paused'}});assert.equal(r.status,200);
+ r=await call(DB,'/testing/requests/'+openId,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'open'}});assert.equal(r.status,200);
+ const expiredId=await create('2000-01-01');
+ r=await call(DB,'/testing/requests/'+expiredId,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'open'}});assert.equal(r.status,400);
+ DB.close();
+});
 test('distribution opportunities require admin verification and owner completion requires independent review',async()=>{
  const DB=database(),owner=await signup(DB,'founder@example.com'),admin=await signup(DB,'admin@example.com'),tester=await signup(DB,'volunteer@example.com');
  DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
@@ -96,6 +129,8 @@ test('distribution opportunities require admin verification and owner completion
  r=await call(DB,'/testing/requests',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).requests[0].feedback_count,1);
  r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,opportunity_id:opportunity.id,title:'Ask community moderators',planned_action:'Review current rules and request approval before posting.',draft:'I am testing a new workspace and would value feedback.',next_action:'Read the pinned community rules.'}});
  assert.equal(r.status,201,await r.clone().text());const activity=(await payload(r)).activity;
+ r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'blocked'}});assert.equal(r.status,400,'blocked work requires a reason');
+ r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'blocked',notes:'The moderators have not replied yet.'}});assert.equal(r.status,200);
  r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'reported_completed',external_url:'https://community.example/posts/123',evidence_notes:'The post is visible at the linked URL.'}});assert.equal(r.status,200);assert.equal((await payload(r)).status,'reported_completed');
  r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified_completed'}});assert.equal(r.status,403);
  r=await call(DB,'/admin/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified_completed',verification_notes:'The linked post is public and matches this plan.'}});assert.equal(r.status,403);

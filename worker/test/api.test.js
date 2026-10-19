@@ -53,6 +53,9 @@ test('guest, CSRF, and admin access boundaries are enforced',async()=>{
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
+ DB.sql.prepare('UPDATE users SET role=? WHERE id=?').run('admin',user.user.id);
+ r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'secret-value'}});assert.equal(r.status,200);const status=await payload(r);assert.equal(status.configured,true);assert.equal(JSON.stringify(status).includes('secret-value'),false);
+ r=await call(DB,'/admin/ai/settings',{method:'POST',headers:{Cookie:user.cookie},extra:{AI_ENABLED:'true'},body:{enabled:true,daily_limit:7,fast_model:'gemini-3.5-flash-lite',reasoning_model:'gemini-3.8-flash'}});assert.equal(r.status,200);assert.equal(JSON.parse(DB.sql.prepare("SELECT value_json FROM settings WHERE key='ai.config'").get().value_json).daily_limit,7);
 });
 test('Gemini stays server-side, uses the configured key, and records usage',async()=>{
  const DB=database(),user=await signup(DB);

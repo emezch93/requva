@@ -1,4 +1,3 @@
-// Run: npm i jsdom (in a temp dir) then node directory-ui.smoke.mjs. Mocks the API, checks directory and product pages.
 import {JSDOM} from 'jsdom';import fs from 'fs';
 const F='/home/claude/requva/frontend/';
 async function run(file,url,mock){

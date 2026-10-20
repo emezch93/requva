@@ -12,6 +12,7 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0003_distribution_workflows.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0004_operational_reporting.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -25,7 +26,7 @@ const cookie=r=>{const value=r.headers.get('Set-Cookie');assert.ok(value,'expect
 const payload=r=>r.json();
 const recovery={recovery_question:'private_phrase',recovery_answer:'a long secret phrase I can remember'};
 async function signup(DB,email='owner@example.com'){
- const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',...recovery}});
+ const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',capabilities:['founder','product_user','tester'],...recovery}});
  assert.equal(r.status,201,await r.clone().text());return{cookie:cookie(r),user:(await payload(r)).user};
 }
 
@@ -52,7 +53,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,5);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,6);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -173,5 +174,32 @@ test('migration 0005 releases legacy pending listings that pass screening and pr
  sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
  const st=id=>sql.prepare('SELECT listing_status s,hold_source h FROM products WHERE id=?').get(id);
  assert.equal(st('ok').s,'approved');assert.equal(st('short').s,'pending');assert.equal(st('short').h,'screening');assert.equal(st('rej').s,'rejected');assert.equal(sql.prepare('SELECT COUNT(*) c FROM products').get().c,3);
+ sql.close();
+});
+
+test('unified accounts: capabilities chosen at signup, activated later, enforced server-side',async()=>{
+ const DB=database();
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'multi@example.com',password:'founder-password-123',capabilities:['product_user','bogus'],...recovery}});assert.equal(r.status,201);
+ const c=cookie(r);assert.deepEqual((await payload(r)).user.capabilities,['product_user']);
+ const product={name:'Capable',url:'https://capable.example',description:'A product made by a later founder'};
+ r=await call(DB,'/products',{method:'POST',headers:{Cookie:c},body:product});assert.equal(r.status,403);assert.equal((await payload(r)).code,'CAPABILITY_REQUIRED');
+ r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:c},body:{product_id:'x'}});assert.equal(r.status,403);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'admin'}});assert.equal(r.status,400);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'founder'}});assert.equal(r.status,200);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'founder'}});assert.deepEqual((await payload(r)).capabilities.sort(),['founder','product_user']);
+ r=await call(DB,'/products',{method:'POST',headers:{Cookie:c},body:product});assert.equal(r.status,201);
+ r=await call(DB,'/auth/me',{headers:{Cookie:c}});assert.deepEqual((await payload(r)).user.capabilities.sort(),['founder','product_user'],'same account, no duplicate');
+ assert.equal(DB.sql.prepare('SELECT COUNT(*) c FROM users').get().c,1);
+ DB.close();
+});
+test('migration 0006 backfills capabilities from existing activity',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const f of ['0001_initial','0002_ai_campaigns_and_tracking','0003_distribution_workflows','0004_operational_reporting','0005_self_service_publishing'])sql.exec(readFileSync(new URL('../migrations/'+f+'.sql',import.meta.url),'utf8'));
+ sql.exec("INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES('f','f@x.com','h','s','r1'),('t','t@x.com','h','s','r2'),('n','n@x.com','h','s','r3')");
+ sql.exec("INSERT INTO products(id,owner_id,name,url,description) VALUES('p','f','P','https://p.example','Describes the product')");
+ sql.exec("INSERT INTO testers(id,user_id,product_id) VALUES('x','t','p')");
+ sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
+ const caps=id=>sql.prepare('SELECT capability c FROM user_capabilities WHERE user_id=? ORDER BY c').all(id).map(x=>x.c);
+ assert.deepEqual(caps('f'),['founder','product_user']);assert.deepEqual(caps('t'),['product_user','tester']);assert.deepEqual(caps('n'),['product_user']);
  sql.close();
 });

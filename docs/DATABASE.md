@@ -44,3 +44,7 @@ D1 references: [Get started with D1](https://developers.cloudflare.com/d1/get-st
 ## Migration 0005: self service publishing
 
 Adds `products.hold_reason` and `products.hold_source` (screening, reports, moderator). `listing_status` keeps its existing values: `approved` is published, `pending` is held for exceptional review, `rejected` is restricted. The migration publishes legacy pending listings that pass basic screening, marks the rest as screening holds, and writes audit rows. No rows are deleted. Apply with `npm run db:remote` in `worker/`.
+
+## Migration 0006: user capabilities
+
+Adds `user_capabilities` (founder, product_user, tester) so one account can hold several capabilities. Existing users get `product_user`; users with products get `founder`; users who opted in as testers get `tester`. The Worker enforces capabilities on product creation, testing request creation and tester opt in, and `POST /api/v1/auth/capabilities` activates more later.

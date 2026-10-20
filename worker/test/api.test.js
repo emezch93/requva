@@ -11,6 +11,7 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0002_ai_campaigns_and_tracking.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0003_distribution_workflows.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0004_operational_reporting.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -51,7 +52,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,4);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,5);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -112,9 +113,9 @@ test('distribution opportunities require admin verification and owner completion
  DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
  let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Fieldnotes',url:'https://fieldnotes.example',description:'A shared workspace for small design teams',problem:'Project context is scattered',audience:'Small design teams',category:'Productivity',objective:'Learn if teams return',feedback_target:'Onboarding clarity',stage:'idea'}});
  assert.equal(r.status,201,await r.clone().text());const product=(await payload(r)).product;
- assert.equal(product.listing_status,'pending');
- r=await call(DB,'/admin/products/'+product.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{listing_status:'approved'}});assert.equal(r.status,200);
- r=await call(DB,'/products/'+product.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{description:'Updated launch details for review.'}});assert.equal(r.status,200);r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,0,'changing public listing details returns it to moderation');r=await call(DB,'/admin/products/'+product.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{listing_status:'approved'}});assert.equal(r.status,200);
+ assert.equal(product.listing_status,'approved');assert.equal(product.published,true);
+ r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'valid product is public without admin approval');
+ r=await call(DB,'/products/'+product.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{description:'Updated launch details for the public listing.'}});assert.equal(r.status,200);r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'a clean edit stays published without review');
  r=await call(DB,'/admin/distribution/opportunities',{method:'POST',headers:{Cookie:admin.cookie},body:{name:'Design team community',destination_url:'https://community.example/join',source_url:'https://community.example/rules',channel:'Communities',audience:'Small design teams',rationale:'Members discuss team workflows',requirements:'Ask moderators before sharing',eligibility:'Product founders',next_action:'Read posting rules',last_verified_at:'2026-10-19'}});
  assert.equal(r.status,201,await r.clone().text());const opportunity=(await payload(r)).opportunity;assert.equal(opportunity.status,'needs_review');
  r=await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).opportunities.length,0);
@@ -141,4 +142,36 @@ test('distribution opportunities require admin verification and owner completion
  r=await call(DB,'/products/'+product.id+'/reports',{method:'POST',headers:{Cookie:tester.cookie},body:{category:'misleading',details:'Please check the description.'}});assert.equal(r.status,201);
  r=await call(DB,'/admin/product-reports',{headers:{Cookie:admin.cookie}});assert.equal((await payload(r)).reports.length,1);
  DB.close();
+});
+
+test('self-service publishing: invalid rejected, suspicious held, duplicates handled, reports restrict, owners cannot self-release',async()=>{
+ const DB=database(),a=await signup(DB,'a@example.com'),b=await signup(DB,'b@example.com');
+ const post=(who,body)=>call(DB,'/products',{method:'POST',headers:{Cookie:who.cookie},body});
+ let r=await post(a,{name:'X',url:'not a url',description:'short'});assert.equal(r.status,400);assert.ok((await payload(r)).errors.length>=2);
+ r=await post(a,{name:'Tidy Tools',url:'https://tidytools.example/app',description:'Small utilities for tidy spreadsheets'});assert.equal(r.status,201);const good=(await payload(r)).product;assert.equal(good.listing_status,'approved');
+ r=await post(a,{name:'Tidy Tools Again',url:'https://www.tidytools.example/app/',description:'Same site submitted twice by owner'});assert.equal(r.status,409);
+ r=await post(b,{name:'Copycat',url:'https://tidytools.example/app',description:'Someone else claiming the same address'});assert.equal(r.status,201);const dup=(await payload(r)).product;assert.equal(dup.listing_status,'pending');assert.equal(dup.published,false);assert.ok(dup.hold_reason);
+ r=await post(b,{name:'Short',url:'https://bit.ly/abc123',description:'Uses a link shortener for the site'});assert.equal((await payload(r)).product.listing_status,'pending');
+ r=await call(DB,'/discover/products');assert.deepEqual((await payload(r)).products.map(p=>p.id),[good.id],'held listings are not public');
+ r=await call(DB,'/products/'+dup.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{url:'https://copycat-original.example'}});assert.equal(r.status,200);
+ r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,2,'owner fix that passes screening releases a screening hold');
+ const reporters=[];for(const e of ['r1@example.com','r2@example.com','r3@example.com'])reporters.push(await signup(DB,e));
+ for(const rep of reporters){r=await call(DB,'/products/'+good.id+'/reports',{method:'POST',headers:{Cookie:rep.cookie},body:{category:'spam',details:'Looks wrong'}});assert.equal(r.status,201)}
+ assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','three distinct reports hold the listing');
+ r=await call(DB,'/products/'+good.id,{method:'PATCH',headers:{Cookie:a.cookie},body:{description:'Updated description that is still fine'}});assert.equal(r.status,200);
+ assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','owner cannot release a report hold');
+ DB.sql.prepare("UPDATE products SET listing_status='rejected',hold_source='moderator' WHERE id=?").run(dup.id);r=await call(DB,'/products/'+dup.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{description:'Trying to edit my way out of a restriction'}});assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(dup.id).s,'rejected');
+ r=await call(DB,'/products/'+good.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{name:'Hijack'}});assert.equal(r.status,404,'other founders cannot edit');
+ DB.close();
+});
+test('migration 0005 releases legacy pending listings that pass screening and preserves the rest',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const f of ['0001_initial','0002_ai_campaigns_and_tracking','0003_distribution_workflows','0004_operational_reporting'])sql.exec(readFileSync(new URL('../migrations/'+f+'.sql',import.meta.url),'utf8'));
+ sql.exec("INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES('u','u@x.com','h','s','rc')");
+ const ins=sql.prepare("INSERT INTO products(id,owner_id,name,url,description,listing_status) VALUES(?,?,?,?,?,?)");
+ ins.run('ok','u','Legit','https://legit.example','A legitimate product description','pending');ins.run('short','u','Sneaky','https://bit.ly/zzz','Shortened link product here','pending');ins.run('rej','u','Banned','https://banned.example','Previously rejected listing text','rejected');
+ sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
+ const st=id=>sql.prepare('SELECT listing_status s,hold_source h FROM products WHERE id=?').get(id);
+ assert.equal(st('ok').s,'approved');assert.equal(st('short').s,'pending');assert.equal(st('short').h,'screening');assert.equal(st('rej').s,'rejected');assert.equal(sql.prepare('SELECT COUNT(*) c FROM products').get().c,3);
+ sql.close();
 });

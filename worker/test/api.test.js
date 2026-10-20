@@ -13,6 +13,7 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0004_operational_reporting.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0007_directory.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -53,7 +54,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,6);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,7);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -202,4 +203,30 @@ test('migration 0006 backfills capabilities from existing activity',()=>{
  const caps=id=>sql.prepare('SELECT capability c FROM user_capabilities WHERE user_id=? ORDER BY c').all(id).map(x=>x.c);
  assert.deepEqual(caps('f'),['founder','product_user']);assert.deepEqual(caps('t'),['product_user','tester']);assert.deepEqual(caps('n'),['product_user']);
  sql.close();
+});
+
+test('public directory: categories, search, filters, detail, tracked outbound clicks, owner-only stats',async()=>{
+ const DB=database(),f=await signup(DB,'dir@example.com'),other=await signup(DB,'other@example.com');
+ let r=await call(DB,'/discover/categories');const cats=(await payload(r)).categories;assert.equal(cats.length,9);
+ const post=body=>call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body});
+ r=await post({name:'LedgerLite',url:'https://ledgerlite.example',tagline:'Bookkeeping for freelancers',description:'Track invoices and expenses without spreadsheets, built for solo freelancers in Nigeria.',problem:'Freelancers lose track of invoices',audience:'Freelancers',category_slug:'business-finance',pricing_model:'freemium',seeking:['testers','feedback'],stage:'launched'});assert.equal(r.status,201,await r.clone().text());const a=(await payload(r)).product;
+ r=await post({name:'PixelPal',url:'https://pixelpal.example',description:'Design helper for social graphics and quick mockups',category_slug:'design-creative',pricing_model:'free'});assert.equal(r.status,201);
+ r=await post({name:'Bad',url:'https://bad.example',description:'Has an invalid category slug here',category_slug:'nope'});assert.equal(r.status,400);
+ r=await post({name:'Bad2',url:'https://bad2.example',description:'Has an invalid pricing model here',pricing_model:'gold'});assert.equal(r.status,400);
+ r=await call(DB,'/discover/products?q=invoices');let d=await payload(r);assert.equal(d.total,1);assert.equal(d.products[0].name,'LedgerLite');assert.equal(JSON.stringify(d).includes('ledgerlite.example'),false,'raw website only exposed through the tracked link');
+ r=await call(DB,'/discover/products?category=design-creative');assert.equal((await payload(r)).total,1);
+ r=await call(DB,'/discover/products?pricing=free');assert.equal((await payload(r)).products[0].name,'PixelPal');
+ r=await call(DB,'/discover/products?q=zzzznothing');assert.equal((await payload(r)).total,0);
+ r=await call(DB,'/discover/products?testing=1');assert.equal((await payload(r)).total,0,'no open testing request yet');
+ r=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:f.cookie},body:{product_id:a.id,tester_type:'Freelancers',instructions:'Create an invoice end to end.',eligibility:'Freelance work',effort_minutes:10,feedback_questions:'What was unclear?',consent_terms:'Feedback is shared with the owner.'}});assert.equal(r.status,201,await r.clone().text());
+ r=await call(DB,'/discover/products?sort=testers');d=await payload(r);assert.deepEqual(d.products.map(p=>p.name),['LedgerLite']);
+ r=await call(DB,'/discover/products/'+a.id);d=await payload(r);assert.equal(d.product.website_host,'ledgerlite.example');assert.ok(d.product.testing.instructions);assert.deepEqual(d.product.seeking.sort(),['feedback','testers']);
+ r=await call(DB,'/discover/view/'+a.id+'?src=detail',{method:'POST'});assert.equal(r.status,201);
+ r=await app.fetch(new Request('https://api.example.test/api/v1/go/'+a.id+'?src=search',{headers:{'CF-Connecting-IP':'9.9.9.9'}}),env(DB));assert.equal(r.status,302);assert.equal(r.headers.get('Location'),'https://ledgerlite.example/');
+ r=await call(DB,'/go/does-not-exist');assert.equal(r.status,404);
+ assert.equal(DB.sql.prepare("SELECT COUNT(*) c FROM product_events WHERE product_id=? AND event_type='outbound_click'").get(a.id).c,1);
+ r=await call(DB,'/products/'+a.id+'/discovery-stats?days=7',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(r.status,200);assert.equal(d.listing_views,1);assert.equal(d.outbound_clicks,1);
+ r=await call(DB,'/products/'+a.id+'/discovery-stats',{headers:{Cookie:other.cookie}});assert.equal(r.status,404,'other founders cannot read private stats');r=await call(DB,'/products/'+a.id+'/discovery-stats');assert.equal(r.status,401);
+ DB.sql.prepare("UPDATE products SET status='paused' WHERE id=?").run(a.id);r=await call(DB,'/discover/products/'+a.id);assert.equal(r.status,404,'paused listings are not public');
+ DB.close();
 });

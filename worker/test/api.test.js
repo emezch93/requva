@@ -11,6 +11,10 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0002_ai_campaigns_and_tracking.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0003_distribution_workflows.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0004_operational_reporting.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0007_directory.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0008_general_feedback.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -24,7 +28,7 @@ const cookie=r=>{const value=r.headers.get('Set-Cookie');assert.ok(value,'expect
 const payload=r=>r.json();
 const recovery={recovery_question:'private_phrase',recovery_answer:'a long secret phrase I can remember'};
 async function signup(DB,email='owner@example.com'){
- const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',...recovery}});
+ const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',capabilities:['founder','product_user','tester'],...recovery}});
  assert.equal(r.status,201,await r.clone().text());return{cookie:cookie(r),user:(await payload(r)).user};
 }
 
@@ -51,7 +55,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,4);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,8);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -112,9 +116,9 @@ test('distribution opportunities require admin verification and owner completion
  DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
  let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Fieldnotes',url:'https://fieldnotes.example',description:'A shared workspace for small design teams',problem:'Project context is scattered',audience:'Small design teams',category:'Productivity',objective:'Learn if teams return',feedback_target:'Onboarding clarity',stage:'idea'}});
  assert.equal(r.status,201,await r.clone().text());const product=(await payload(r)).product;
- assert.equal(product.listing_status,'pending');
- r=await call(DB,'/admin/products/'+product.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{listing_status:'approved'}});assert.equal(r.status,200);
- r=await call(DB,'/products/'+product.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{description:'Updated launch details for review.'}});assert.equal(r.status,200);r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,0,'changing public listing details returns it to moderation');r=await call(DB,'/admin/products/'+product.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{listing_status:'approved'}});assert.equal(r.status,200);
+ assert.equal(product.listing_status,'approved');assert.equal(product.published,true);
+ r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'valid product is public without admin approval');
+ r=await call(DB,'/products/'+product.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{description:'Updated launch details for the public listing.'}});assert.equal(r.status,200);r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'a clean edit stays published without review');
  r=await call(DB,'/admin/distribution/opportunities',{method:'POST',headers:{Cookie:admin.cookie},body:{name:'Design team community',destination_url:'https://community.example/join',source_url:'https://community.example/rules',channel:'Communities',audience:'Small design teams',rationale:'Members discuss team workflows',requirements:'Ask moderators before sharing',eligibility:'Product founders',next_action:'Read posting rules',last_verified_at:'2026-10-19'}});
  assert.equal(r.status,201,await r.clone().text());const opportunity=(await payload(r)).opportunity;assert.equal(opportunity.status,'needs_review');
  r=await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).opportunities.length,0);
@@ -140,5 +144,130 @@ test('distribution opportunities require admin verification and owner completion
  r=await call(DB,'/admin/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified_completed',verification_notes:'The linked post is public and matches this plan.'}});assert.equal(r.status,200);
  r=await call(DB,'/products/'+product.id+'/reports',{method:'POST',headers:{Cookie:tester.cookie},body:{category:'misleading',details:'Please check the description.'}});assert.equal(r.status,201);
  r=await call(DB,'/admin/product-reports',{headers:{Cookie:admin.cookie}});assert.equal((await payload(r)).reports.length,1);
+ DB.close();
+});
+
+test('self-service publishing: invalid rejected, suspicious held, duplicates handled, reports restrict, owners cannot self-release',async()=>{
+ const DB=database(),a=await signup(DB,'a@example.com'),b=await signup(DB,'b@example.com');
+ const post=(who,body)=>call(DB,'/products',{method:'POST',headers:{Cookie:who.cookie},body});
+ let r=await post(a,{name:'X',url:'not a url',description:'short'});assert.equal(r.status,400);assert.ok((await payload(r)).errors.length>=2);
+ r=await post(a,{name:'Tidy Tools',url:'https://tidytools.example/app',description:'Small utilities for tidy spreadsheets'});assert.equal(r.status,201);const good=(await payload(r)).product;assert.equal(good.listing_status,'approved');
+ r=await post(a,{name:'Tidy Tools Again',url:'https://www.tidytools.example/app/',description:'Same site submitted twice by owner'});assert.equal(r.status,409);
+ r=await post(b,{name:'Copycat',url:'https://tidytools.example/app',description:'Someone else claiming the same address'});assert.equal(r.status,201);const dup=(await payload(r)).product;assert.equal(dup.listing_status,'pending');assert.equal(dup.published,false);assert.ok(dup.hold_reason);
+ r=await post(b,{name:'Short',url:'https://bit.ly/abc123',description:'Uses a link shortener for the site'});assert.equal((await payload(r)).product.listing_status,'pending');
+ r=await call(DB,'/discover/products');assert.deepEqual((await payload(r)).products.map(p=>p.id),[good.id],'held listings are not public');
+ r=await call(DB,'/products/'+dup.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{url:'https://copycat-original.example'}});assert.equal(r.status,200);
+ r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,2,'owner fix that passes screening releases a screening hold');
+ const reporters=[];for(const e of ['r1@example.com','r2@example.com','r3@example.com'])reporters.push(await signup(DB,e));
+ for(const rep of reporters){r=await call(DB,'/products/'+good.id+'/reports',{method:'POST',headers:{Cookie:rep.cookie},body:{category:'spam',details:'Looks wrong'}});assert.equal(r.status,201)}
+ assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','three distinct reports hold the listing');
+ r=await call(DB,'/products/'+good.id,{method:'PATCH',headers:{Cookie:a.cookie},body:{description:'Updated description that is still fine'}});assert.equal(r.status,200);
+ assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','owner cannot release a report hold');
+ DB.sql.prepare("UPDATE products SET listing_status='rejected',hold_source='moderator' WHERE id=?").run(dup.id);r=await call(DB,'/products/'+dup.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{description:'Trying to edit my way out of a restriction'}});assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(dup.id).s,'rejected');
+ r=await call(DB,'/products/'+good.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{name:'Hijack'}});assert.equal(r.status,404,'other founders cannot edit');
+ DB.close();
+});
+test('migration 0005 releases legacy pending listings that pass screening and preserves the rest',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const f of ['0001_initial','0002_ai_campaigns_and_tracking','0003_distribution_workflows','0004_operational_reporting'])sql.exec(readFileSync(new URL('../migrations/'+f+'.sql',import.meta.url),'utf8'));
+ sql.exec("INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES('u','u@x.com','h','s','rc')");
+ const ins=sql.prepare("INSERT INTO products(id,owner_id,name,url,description,listing_status) VALUES(?,?,?,?,?,?)");
+ ins.run('ok','u','Legit','https://legit.example','A legitimate product description','pending');ins.run('short','u','Sneaky','https://bit.ly/zzz','Shortened link product here','pending');ins.run('rej','u','Banned','https://banned.example','Previously rejected listing text','rejected');
+ sql.exec(readFileSync(new URL('../migrations/0005_self_service_publishing.sql',import.meta.url),'utf8'));
+ const st=id=>sql.prepare('SELECT listing_status s,hold_source h FROM products WHERE id=?').get(id);
+ assert.equal(st('ok').s,'approved');assert.equal(st('short').s,'pending');assert.equal(st('short').h,'screening');assert.equal(st('rej').s,'rejected');assert.equal(sql.prepare('SELECT COUNT(*) c FROM products').get().c,3);
+ sql.close();
+});
+
+test('unified accounts: capabilities chosen at signup, activated later, enforced server-side',async()=>{
+ const DB=database();
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'multi@example.com',password:'founder-password-123',capabilities:['product_user','bogus'],...recovery}});assert.equal(r.status,201);
+ const c=cookie(r);assert.deepEqual((await payload(r)).user.capabilities,['product_user']);
+ const product={name:'Capable',url:'https://capable.example',description:'A product made by a later founder'};
+ r=await call(DB,'/products',{method:'POST',headers:{Cookie:c},body:product});assert.equal(r.status,403);assert.equal((await payload(r)).code,'CAPABILITY_REQUIRED');
+ r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:c},body:{product_id:'x'}});assert.equal(r.status,403);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'admin'}});assert.equal(r.status,400);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'founder'}});assert.equal(r.status,200);
+ r=await call(DB,'/auth/capabilities',{method:'POST',headers:{Cookie:c},body:{capability:'founder'}});assert.deepEqual((await payload(r)).capabilities.sort(),['founder','product_user']);
+ r=await call(DB,'/products',{method:'POST',headers:{Cookie:c},body:product});assert.equal(r.status,201);
+ r=await call(DB,'/auth/me',{headers:{Cookie:c}});assert.deepEqual((await payload(r)).user.capabilities.sort(),['founder','product_user'],'same account, no duplicate');
+ assert.equal(DB.sql.prepare('SELECT COUNT(*) c FROM users').get().c,1);
+ DB.close();
+});
+test('migration 0006 backfills capabilities from existing activity',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const f of ['0001_initial','0002_ai_campaigns_and_tracking','0003_distribution_workflows','0004_operational_reporting','0005_self_service_publishing'])sql.exec(readFileSync(new URL('../migrations/'+f+'.sql',import.meta.url),'utf8'));
+ sql.exec("INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES('f','f@x.com','h','s','r1'),('t','t@x.com','h','s','r2'),('n','n@x.com','h','s','r3')");
+ sql.exec("INSERT INTO products(id,owner_id,name,url,description) VALUES('p','f','P','https://p.example','Describes the product')");
+ sql.exec("INSERT INTO testers(id,user_id,product_id) VALUES('x','t','p')");
+ sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
+ const caps=id=>sql.prepare('SELECT capability c FROM user_capabilities WHERE user_id=? ORDER BY c').all(id).map(x=>x.c);
+ assert.deepEqual(caps('f'),['founder','product_user']);assert.deepEqual(caps('t'),['product_user','tester']);assert.deepEqual(caps('n'),['product_user']);
+ sql.close();
+});
+
+test('public directory: categories, search, filters, detail, tracked outbound clicks, owner-only stats',async()=>{
+ const DB=database(),f=await signup(DB,'dir@example.com'),other=await signup(DB,'other@example.com');
+ let r=await call(DB,'/discover/categories');const cats=(await payload(r)).categories;assert.equal(cats.length,9);
+ const post=body=>call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body});
+ r=await post({name:'LedgerLite',url:'https://ledgerlite.example',tagline:'Bookkeeping for freelancers',description:'Track invoices and expenses without spreadsheets, built for solo freelancers in Nigeria.',problem:'Freelancers lose track of invoices',audience:'Freelancers',category_slug:'business-finance',pricing_model:'freemium',seeking:['testers','feedback'],stage:'launched'});assert.equal(r.status,201,await r.clone().text());const a=(await payload(r)).product;
+ r=await post({name:'PixelPal',url:'https://pixelpal.example',description:'Design helper for social graphics and quick mockups',category_slug:'design-creative',pricing_model:'free'});assert.equal(r.status,201);
+ r=await post({name:'Bad',url:'https://bad.example',description:'Has an invalid category slug here',category_slug:'nope'});assert.equal(r.status,400);
+ r=await post({name:'Bad2',url:'https://bad2.example',description:'Has an invalid pricing model here',pricing_model:'gold'});assert.equal(r.status,400);
+ r=await call(DB,'/discover/products?q=invoices');let d=await payload(r);assert.equal(d.total,1);assert.equal(d.products[0].name,'LedgerLite');assert.equal(JSON.stringify(d).includes('ledgerlite.example'),false,'raw website only exposed through the tracked link');
+ r=await call(DB,'/discover/products?category=design-creative');assert.equal((await payload(r)).total,1);
+ r=await call(DB,'/discover/products?pricing=free');assert.equal((await payload(r)).products[0].name,'PixelPal');
+ r=await call(DB,'/discover/products?q=zzzznothing');assert.equal((await payload(r)).total,0);
+ r=await call(DB,'/discover/products?testing=1');assert.equal((await payload(r)).total,0,'no open testing request yet');
+ r=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:f.cookie},body:{product_id:a.id,tester_type:'Freelancers',instructions:'Create an invoice end to end.',eligibility:'Freelance work',effort_minutes:10,feedback_questions:'What was unclear?',consent_terms:'Feedback is shared with the owner.'}});assert.equal(r.status,201,await r.clone().text());
+ r=await call(DB,'/discover/products?sort=testers');d=await payload(r);assert.deepEqual(d.products.map(p=>p.name),['LedgerLite']);
+ r=await call(DB,'/discover/products/'+a.id);d=await payload(r);assert.equal(d.product.website_host,'ledgerlite.example');assert.ok(d.product.testing.instructions);assert.deepEqual(d.product.seeking.sort(),['feedback','testers']);
+ r=await call(DB,'/discover/view/'+a.id+'?src=detail',{method:'POST'});assert.equal(r.status,201);
+ r=await app.fetch(new Request('https://api.example.test/api/v1/go/'+a.id+'?src=search',{headers:{'CF-Connecting-IP':'9.9.9.9'}}),env(DB));assert.equal(r.status,302);assert.equal(r.headers.get('Location'),'https://ledgerlite.example/');
+ r=await call(DB,'/go/does-not-exist');assert.equal(r.status,404);
+ assert.equal(DB.sql.prepare("SELECT COUNT(*) c FROM product_events WHERE product_id=? AND event_type='outbound_click'").get(a.id).c,1);
+ r=await call(DB,'/products/'+a.id+'/discovery-stats?days=7',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(r.status,200);assert.equal(d.listing_views,1);assert.equal(d.outbound_clicks,1);
+ r=await call(DB,'/products/'+a.id+'/discovery-stats',{headers:{Cookie:other.cookie}});assert.equal(r.status,404,'other founders cannot read private stats');r=await call(DB,'/products/'+a.id+'/discovery-stats');assert.equal(r.status,401);
+ DB.sql.prepare("UPDATE products SET status='paused' WHERE id=?").run(a.id);r=await call(DB,'/discover/products/'+a.id);assert.equal(r.status,404,'paused listings are not public');
+ DB.close();
+});
+
+test('general feedback: submit, founder view and respond, withdraw, report hides, privacy and ownership',async()=>{
+ const DB=database(),f=await signup(DB,'fo@example.com'),u1=await signup(DB,'u1@example.com'),u2=await signup(DB,'u2@example.com'),u3=await signup(DB,'u3@example.com'),x=await signup(DB,'x@example.com');
+ let r=await call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body:{name:'FeedApp',url:'https://feedapp.example',description:'An app that wants honest feedback from users'}});const pid=(await payload(r)).product.id;
+ const give=(who,body,id=pid)=>call(DB,'/discover/products/'+id+'/feedback',{method:'POST',headers:{Cookie:who.cookie},body});
+ r=await call(DB,'/discover/products/'+pid+'/feedback',{method:'POST',body:{body:'guest feedback here'}});assert.equal(r.status,401);
+ r=await give(f,{body:'Praising my own product'});assert.equal(r.status,403);
+ r=await give(u1,{body:'ok'});assert.equal(r.status,400);
+ r=await give(u1,{body:'The signup form hides the submit button on mobile',kind:'bug'});assert.equal(r.status,201);const fid=(await payload(r)).feedback.id;
+ r=await give(u2,{body:'Great idea, please add dark mode',kind:'idea'});assert.equal(r.status,201);const fid2=(await payload(r)).feedback.id;
+ r=await give(u1,{body:'valid feedback on a missing product',kind:'bug'},'missing');assert.equal(r.status,404);
+ r=await call(DB,'/products/'+pid+'/general-feedback',{headers:{Cookie:f.cookie}});let d=await payload(r);assert.equal(d.feedback.length,2);assert.equal(JSON.stringify(d).includes('u1@example.com'),false,'author email never exposed');
+ r=await call(DB,'/products/'+pid+'/general-feedback',{headers:{Cookie:x.cookie}});assert.equal(r.status,404,'other founders cannot read feedback');
+ r=await call(DB,'/products/'+pid+'/general-feedback/'+fid+'/respond',{method:'POST',headers:{Cookie:f.cookie},body:{response:'Thanks, fixing this week.'}});assert.equal(r.status,200);
+ r=await call(DB,'/feedback/general/mine',{headers:{Cookie:u1.cookie}});d=await payload(r);assert.equal(d.feedback[0].owner_response,'Thanks, fixing this week.');
+ r=await call(DB,'/feedback/general/'+fid2,{method:'DELETE',headers:{Cookie:u1.cookie}});assert.equal(r.status,404,'only the author can withdraw');
+ r=await call(DB,'/feedback/general/'+fid2,{method:'DELETE',headers:{Cookie:u2.cookie}});assert.equal(r.status,200);
+ r=await call(DB,'/products/'+pid+'/general-feedback',{headers:{Cookie:f.cookie}});assert.equal((await payload(r)).feedback.length,1,'withdrawn feedback disappears from founder view');
+ r=await call(DB,'/feedback/general/'+fid+'/report',{method:'POST',headers:{Cookie:u1.cookie},body:{reason:'x'}});assert.equal(r.status,403,'cannot report own');
+ r=await call(DB,'/feedback/general/'+fid+'/report',{method:'POST',headers:{Cookie:u2.cookie},body:{reason:'spam'}});assert.equal(r.status,201);
+ r=await call(DB,'/feedback/general/'+fid+'/report',{method:'POST',headers:{Cookie:u2.cookie},body:{reason:'spam'}});assert.equal(r.status,409);
+ r=await call(DB,'/feedback/general/'+fid+'/report',{method:'POST',headers:{Cookie:u3.cookie},body:{reason:'abuse'}});assert.equal(r.status,201);
+ r=await call(DB,'/products/'+pid+'/general-feedback',{headers:{Cookie:f.cookie}});assert.equal((await payload(r)).feedback.length,0,'two distinct reports hide feedback');
+ DB.close();
+});
+test('growth workspace: honest metrics, funnel states, unconfigured tracking, ownership',async()=>{
+ const DB=database(),f=await signup(DB,'g@example.com'),o=await signup(DB,'o@example.com');
+ let r=await call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body:{name:'GrowApp',url:'https://growapp.example',description:'A product used to check growth metrics'}});const pid=(await payload(r)).product.id;
+ await call(DB,'/discover/view/'+pid,{method:'POST'});await call(DB,'/discover/view/'+pid,{method:'POST'});
+ r=await call(DB,'/products/'+pid+'/growth?days=7',{headers:{Cookie:f.cookie}});let d=await payload(r);assert.equal(r.status,200);
+ assert.equal(d.discovery.listing_views,2);assert.equal(d.discovery.outbound_clicks,0);
+ assert.equal(d.acquisition.configured,false);assert.equal(d.acquisition.message,'Signup tracking not configured');assert.equal(d.acquisition.signups,undefined,'no zero signups when unconfigured');
+ assert.equal(d.testing.opted_in,0);assert.match(d.distribution.note,/verified/i);
+ r=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:f.cookie},body:{product_id:pid,tester_type:'Anyone',instructions:'Try the main flow.',feedback_questions:'What broke?',consent_terms:'Feedback goes to the owner.'}});assert.equal(r.status,201);
+ r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:o.cookie},body:{product_id:pid,testing_request_id:(await payload(r)).request?.id}});
+ r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(d.testing.campaigns_created,1);
+ r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:o.cookie}});assert.equal(r.status,404);
+ r=await call(DB,'/products/'+pid+'/growth');assert.equal(r.status,401);
  DB.close();
 });

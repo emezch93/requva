@@ -7,7 +7,7 @@ Requva is a product discovery and tester feedback workspace. The static frontend
 ## What the app does
 
 - Account signup/login, seven-day secure sessions, password changes, and password reset with a security question.
-- Product profiles with problem, audience, category, launch objective, and feedback focus; new public listings require administrator approval.
+- Product profiles with problem, audience, category, launch objective, and feedback focus; valid listings publish automatically after backend screening; suspicious or heavily reported listings are held for exceptional review.
 - A moderated public product directory with text/category search, shareable listing URLs, and user-submitted listing reports.
 - Opt-in testing requests with stated requirements, effort, feedback questions, consent terms, tester start/feedback milestones, owner-visible aggregate counts, and owner controls to pause, reopen, or close recruitment. Owners do not receive tester contact details.
 - A curated opportunity catalog that administrators must populate with real destination and source links, then verify manually. No sample communities or fabricated partners are preloaded.

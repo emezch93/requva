@@ -40,3 +40,13 @@ For local code checks, see [TESTING.md](TESTING.md). Cloudflare dashboard creden
 ## Independent deployments
 
 Pages publishes the static files from `frontend/`; it does not deploy the API. Workers Builds uses the `worker/` root and runs the configured remote migration command before deploying the Worker. After a code change, check each deployment independently. A Pages success message does not prove the Worker version changed, and a Worker deployment does not prove Pages published the latest frontend.
+
+## Release: self service network (migrations 0005 to 0008)
+
+Before deploying, back up D1: `cd worker && npx wrangler d1 export requva-production --remote --output backup-before-0005.sql`.
+
+1. Merge `feature/self-service-publishing` into `main` (or push the files from the deployment zip). Both Pages and Workers Builds redeploy.
+2. The Worker build runs `npm run db:remote`, applying 0005 (self service publishing), 0006 (capabilities), 0007 (directory) and 0008 (general feedback). All are additive. 0005 publishes legacy pending listings that pass screening and holds the rest.
+3. Check `https://requva.emezch93.workers.dev/api/v1/health` returns `schemaVersion: 8`.
+4. Smoke test: register with the founder capability, submit a product, open `/discover.html`, search for it, click Visit, open `/product.html?id=...`, leave feedback from a second account, then check the Growth workspace on `/dashboard.html`.
+5. No new secrets, bindings or KV are needed. `GEMINI_API_KEY` stays a Worker secret.

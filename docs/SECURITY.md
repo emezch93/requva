@@ -32,7 +32,7 @@ These controls are not a security certification. Configure Cloudflare bot/WAF co
 
 ## Directory, tester, and distribution controls
 
-New product listings default to pending and are visible publicly only after administrator approval. Listing reports are stored for review. Testers must opt in to an open request and confirm its consent terms; the terms they accepted are stored with their tester record. Product owners see aggregate opt-in, started, and feedback-submitted counts, not tester contact details. Testers may withdraw their opt-in.
+Valid product listings publish automatically. Backend screening (required fields, URL validation, link shorteners, IP or local hosts, spam terms, duplicate addresses, daily limit and rate limits) holds suspicious submissions as pending. Three distinct open reports also hold a listing. Owners can release only screening holds by fixing the listing; report holds and restrictions need an administrator. Listing reports are stored for review. Testers must opt in to an open request and confirm its consent terms; the terms they accepted are stored with their tester record. Product owners see aggregate opt-in, started, and feedback-submitted counts, not tester contact details. Testers may withdraw their opt-in.
 
 Owners may report activity status and evidence but cannot set `verified_completed`. Only an administrator can verify owner-reported evidence, and an administrator cannot verify their own activity. Analytics events authenticated with a product tracking token are owner-reported measurements. They are deduplicated but not independently audited by Requva.
 

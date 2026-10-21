@@ -40,3 +40,21 @@ Public account registration is enabled in the Cloudflare Worker. The browser sen
 
 D1 references: [Get started with D1](https://developers.cloudflare.com/d1/get-started/) and [D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/).
 
+
+## Migration 0005: self service publishing
+
+Adds `products.hold_reason` and `products.hold_source` (screening, reports, moderator). `listing_status` keeps its existing values: `approved` is published, `pending` is held for exceptional review, `rejected` is restricted. The migration publishes legacy pending listings that pass basic screening, marks the rest as screening holds, and writes audit rows. No rows are deleted. Apply with `npm run db:remote` in `worker/`.
+
+## Migration 0006: user capabilities
+
+Adds `user_capabilities` (founder, product_user, tester) so one account can hold several capabilities. Existing users get `product_user`; users with products get `founder`; users who opted in as testers get `tester`. The Worker enforces capabilities on product creation, testing request creation and tester opt in, and `POST /api/v1/auth/capabilities` activates more later.
+
+## Migration 0007: directory
+
+Adds `categories` (seeded with nine categories, editable data), listing fields on `products` (`tagline`, `category_slug`, `subcategory`, `pricing_model`, `supported_region`, `seeking`) and `product_events` (`listing_view`, `outbound_click`). Legacy free text categories are mapped to slugs only when they match exactly.
+
+## Discovery API and ranking
+
+Public routes: `GET /api/v1/discover/categories`, `GET /api/v1/discover/products` (q, category, pricing, stage, testing, sort, page), `GET /api/v1/discover/products/:id`, `POST /api/v1/discover/view/:id`, `GET /api/v1/go/:id` (records an outbound click, then redirects). Owner route: `GET /api/v1/products/:id/discovery-stats?days=7|30|90`.
+
+Default ranking inputs: text match weighted by field (name, tagline and problem, then other fields), listing completeness, open testing request, a boost for listings under 14 days old that decays to zero, and a small daily rotation seeded by product id and date. Click and view counts are deliberately not ranking inputs, so large audiences cannot lock in position. Events are rate limited per visitor and product (30 per hour). Only active, approved listings appear. The raw website address is exposed only through the tracked redirect.

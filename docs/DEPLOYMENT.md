@@ -50,3 +50,10 @@ Before deploying, back up D1: `cd worker && npx wrangler d1 export requva-produc
 3. Check `https://requva.emezch93.workers.dev/api/v1/health` returns `schemaVersion: 8`.
 4. Smoke test: register with the founder capability, submit a product, open `/discover.html`, search for it, click Visit, open `/product.html?id=...`, leave feedback from a second account, then check the Growth workspace on `/dashboard.html`.
 5. No new secrets, bindings or KV are needed. `GEMINI_API_KEY` stays a Worker secret.
+
+## Release 2: hardening and design (migration 0009)
+
+1. Back up D1 again, then deploy as before. Migration 0009 only adds a column and two indexes. Health should report `schemaVersion: 9`.
+2. Optional alerts: in the Worker dashboard add a secret named `ALERT_WEBHOOK_URL` containing a Discord or Slack incoming webhook URL. Without it, held listings are visible only in the admin console.
+3. After deploying, log out and log in once so the browser stores a bearer token. Test login on an iPhone in Safari.
+4. New pages: `leaving.html`, theme in `theme.css`, redesigned homepage with live listings from the API.

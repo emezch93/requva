@@ -37,3 +37,16 @@ Valid product listings publish automatically. Backend screening (required fields
 Owners may report activity status and evidence but cannot set `verified_completed`. Only an administrator can verify owner-reported evidence, and an administrator cannot verify their own activity. Analytics events authenticated with a product tracking token are owner-reported measurements. They are deduplicated but not independently audited by Requva.
 
 The opportunity catalog is manually maintained. A verification date records when an administrator checked the supplied destination and source links; the app does not crawl or continuously recheck those links.
+
+## Sessions without a custom domain
+
+The site (`requva.pages.dev`) and API (`workers.dev`) are different sites, so browsers may block the session cookie as third party. Login and registration also return `session_token`; the frontend stores it in `localStorage` and sends `Authorization: Bearer`. The Worker accepts the bearer token or the cookie, hashes tokens at rest, expires sessions server side, and logout revokes them. State changing requests still require the verified Origin and `X-Requested-With`. XSS is the main risk of this approach, so the CSP forbids inline scripts and styles and all page text is inserted with `textContent`. Keep it that way: never add inline scripts or `innerHTML` with API data.
+
+## Abuse controls added in migration 0009 and the hardening release
+
+- Listing screening also holds non https addresses, look alike (xn--) domains and sensitive brand words in the domain that do not match the product name.
+- New accounts can list 2 products in their first 24 hours.
+- Only reports from accounts older than 24 hours count toward the automatic report hold.
+- Listings younger than 14 days open a "You are leaving Requva" page before the outbound click is counted or followed.
+- Views and clicks ignore bots and empty user agents and count once per visitor per product per hour (a daily rotating hash, no raw IP stored).
+- Optional `ALERT_WEBHOOK_URL` (Worker secret, for example a Discord or Slack webhook) is called when a listing is held or auto held. Alerts never include emails.

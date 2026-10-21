@@ -15,12 +15,13 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0006_user_capabilities.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0007_directory.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0008_general_feedback.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0009_hardening.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
 function env(DB,extra={}){return{DB,FRONTEND_ORIGIN:ORIGIN,AI_ENABLED:'false',...extra}}
 async function call(DB,path,{method='GET',body,headers={},extra={}}={}){
- const h=new Headers({Origin:ORIGIN,'X-Requested-With':'Requva','CF-Connecting-IP':crypto.randomUUID(),...headers});
+ const h=new Headers({Origin:ORIGIN,'X-Requested-With':'Requva','CF-Connecting-IP':crypto.randomUUID(),'User-Agent':'Mozilla/5.0 (test)',...headers});
  if(body!==undefined)h.set('Content-Type','application/json');
  return app.fetch(new Request('https://api.example.test/api/v1'+path,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body)}),env(DB,extra));
 }
@@ -55,7 +56,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,8);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,9);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -159,7 +160,10 @@ test('self-service publishing: invalid rejected, suspicious held, duplicates han
  r=await call(DB,'/products/'+dup.id,{method:'PATCH',headers:{Cookie:b.cookie},body:{url:'https://copycat-original.example'}});assert.equal(r.status,200);
  r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,2,'owner fix that passes screening releases a screening hold');
  const reporters=[];for(const e of ['r1@example.com','r2@example.com','r3@example.com'])reporters.push(await signup(DB,e));
- for(const rep of reporters){r=await call(DB,'/products/'+good.id+'/reports',{method:'POST',headers:{Cookie:rep.cookie},body:{category:'spam',details:'Looks wrong'}});assert.equal(r.status,201)}
+ for(const rep of reporters.slice(0,2)){r=await call(DB,'/products/'+good.id+'/reports',{method:'POST',headers:{Cookie:rep.cookie},body:{category:'spam',details:'Looks wrong'}});assert.equal(r.status,201)}
+ assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'approved','two reports do not hold');
+ DB.sql.prepare("UPDATE users SET created_at='2020-01-01T00:00:00.000Z' WHERE email LIKE 'r_@example.com'").run();
+ for(const rep of reporters.slice(2)){r=await call(DB,'/products/'+good.id+'/reports',{method:'POST',headers:{Cookie:rep.cookie},body:{category:'spam',details:'Looks wrong'}});assert.equal(r.status,201)}
  assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','three distinct reports hold the listing');
  r=await call(DB,'/products/'+good.id,{method:'PATCH',headers:{Cookie:a.cookie},body:{description:'Updated description that is still fine'}});assert.equal(r.status,200);
  assert.equal(DB.sql.prepare('SELECT listing_status s FROM products WHERE id=?').get(good.id).s,'pending','owner cannot release a report hold');
@@ -207,7 +211,7 @@ test('migration 0006 backfills capabilities from existing activity',()=>{
 });
 
 test('public directory: categories, search, filters, detail, tracked outbound clicks, owner-only stats',async()=>{
- const DB=database(),f=await signup(DB,'dir@example.com'),other=await signup(DB,'other@example.com');
+ const DB=database(),f=await signup(DB,'dir@example.com'),other=await signup(DB,'other@example.com');DB.sql.prepare("UPDATE users SET created_at='2020-01-01T00:00:00.000Z'").run();
  let r=await call(DB,'/discover/categories');const cats=(await payload(r)).categories;assert.equal(cats.length,9);
  const post=body=>call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body});
  r=await post({name:'LedgerLite',url:'https://ledgerlite.example',tagline:'Bookkeeping for freelancers',description:'Track invoices and expenses without spreadsheets, built for solo freelancers in Nigeria.',problem:'Freelancers lose track of invoices',audience:'Freelancers',category_slug:'business-finance',pricing_model:'freemium',seeking:['testers','feedback'],stage:'launched'});assert.equal(r.status,201,await r.clone().text());const a=(await payload(r)).product;
@@ -223,9 +227,12 @@ test('public directory: categories, search, filters, detail, tracked outbound cl
  r=await call(DB,'/discover/products?sort=testers');d=await payload(r);assert.deepEqual(d.products.map(p=>p.name),['LedgerLite']);
  r=await call(DB,'/discover/products/'+a.id);d=await payload(r);assert.equal(d.product.website_host,'ledgerlite.example');assert.ok(d.product.testing.instructions);assert.deepEqual(d.product.seeking.sort(),['feedback','testers']);
  r=await call(DB,'/discover/view/'+a.id+'?src=detail',{method:'POST'});assert.equal(r.status,201);
- r=await app.fetch(new Request('https://api.example.test/api/v1/go/'+a.id+'?src=search',{headers:{'CF-Connecting-IP':'9.9.9.9'}}),env(DB));assert.equal(r.status,302);assert.equal(r.headers.get('Location'),'https://ledgerlite.example/');
+ const go=(q,ip='9.9.9.9',ua='Mozilla/5.0')=>app.fetch(new Request('https://api.example.test/api/v1/go/'+a.id+q,{headers:{'CF-Connecting-IP':ip,'User-Agent':ua}}),env(DB));
+ r=await go('?src=search');assert.equal(r.status,302);assert.match(r.headers.get('Location'),/\/leaving\.html\?id=/,'new listings go through the leaving page');assert.equal(DB.sql.prepare("SELECT COUNT(*) c FROM product_events WHERE event_type='outbound_click'").get().c,0,'no click until confirmed');
+ r=await go('?src=search&confirm=1');assert.equal(r.status,302);assert.equal(r.headers.get('Location'),'https://ledgerlite.example/');
+ r=await go('?src=search&confirm=1');assert.equal(r.status,302);r=await go('?confirm=1','8.8.8.8','Googlebot/2.1');assert.equal(r.status,302);r=await go('?confirm=1','7.7.7.7','');
  r=await call(DB,'/go/does-not-exist');assert.equal(r.status,404);
- assert.equal(DB.sql.prepare("SELECT COUNT(*) c FROM product_events WHERE product_id=? AND event_type='outbound_click'").get(a.id).c,1);
+ assert.equal(DB.sql.prepare("SELECT COUNT(*) c FROM product_events WHERE product_id=? AND event_type='outbound_click'").get(a.id).c,1,'repeat click from same visitor, bots and empty user agents are not counted');
  r=await call(DB,'/products/'+a.id+'/discovery-stats?days=7',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(r.status,200);assert.equal(d.listing_views,1);assert.equal(d.outbound_clicks,1);
  r=await call(DB,'/products/'+a.id+'/discovery-stats',{headers:{Cookie:other.cookie}});assert.equal(r.status,404,'other founders cannot read private stats');r=await call(DB,'/products/'+a.id+'/discovery-stats');assert.equal(r.status,401);
  DB.sql.prepare("UPDATE products SET status='paused' WHERE id=?").run(a.id);r=await call(DB,'/discover/products/'+a.id);assert.equal(r.status,404,'paused listings are not public');
@@ -269,5 +276,38 @@ test('growth workspace: honest metrics, funnel states, unconfigured tracking, ow
  r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(d.testing.campaigns_created,1);
  r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:o.cookie}});assert.equal(r.status,404);
  r=await call(DB,'/products/'+pid+'/growth');assert.equal(r.status,401);
+ DB.close();
+});
+
+test('hardening: bearer sessions work without cookies, young account limits, stricter screening, admin alerts',async()=>{
+ const DB=database();
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'bearer@example.com',password:'founder-password-123',capabilities:['founder','product_user'],...recovery}});const token=(await payload(r)).session_token;assert.ok(token);
+ r=await call(DB,'/auth/me',{headers:{Authorization:'Bearer '+token}});assert.equal((await payload(r)).user.email,'bearer@example.com','bearer token authenticates without any cookie');
+ r=await call(DB,'/auth/me',{headers:{Authorization:'Bearer wrong'}});assert.equal((await payload(r)).user,null);
+ r=await call(DB,'/auth/login',{method:'POST',body:{email:'bearer@example.com',password:'founder-password-123'}});assert.ok((await payload(r)).session_token);
+ const alerts=[],realFetch=globalThis.fetch;globalThis.fetch=async(u,o)=>{alerts.push({u:String(u),body:o.body});return new Response('ok')};
+ const post=(body)=>call(DB,'/products',{method:'POST',headers:{Authorization:'Bearer '+token},body,extra:{ALERT_WEBHOOK_URL:'https://hooks.example/alert'}});
+ try{
+  r=await post({name:'Plain',url:'http://plain.example',description:'Uses plain http for the site address'});assert.equal((await payload(r)).product.listing_status,'pending','http holds');
+  r=await post({name:'Gadget',url:'https://paypal-login.example',description:'Looks like a payment brand site'});assert.equal((await payload(r)).product.listing_status,'pending','brand words hold');
+  r=await post({name:'Third',url:'https://third.example',description:'A third listing on a brand new account'});assert.equal(r.status,429,'third product in the first day is refused');
+ }finally{globalThis.fetch=realFetch}
+ assert.equal(alerts.length,2);assert.ok(alerts.every(a=>a.u==='https://hooks.example/alert'&&!/@/.test(a.body)),'alerts carry no emails');
+ DB.sql.prepare("UPDATE users SET created_at='2020-01-01T00:00:00.000Z'").run();
+ r=await post({name:'Bankly',url:'https://bankly.example',description:'Product name matches its own domain words'});assert.equal((await payload(r)).product.listing_status,'approved','matching brand word is allowed');
+ r=await call(DB,'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token}});assert.equal(r.status,200);
+ r=await call(DB,'/auth/me',{headers:{Authorization:'Bearer '+token}});assert.equal((await payload(r)).user,null,'logout revokes the bearer session');
+ DB.close();
+});
+test('directory paging and ranking happen in SQL so older listings stay reachable',async()=>{
+ const DB=database(),f=await signup(DB,'bulk@example.com');
+ DB.sql.prepare("UPDATE users SET created_at='2020-01-01T00:00:00.000Z'").run();
+ const uid=DB.sql.prepare('SELECT id FROM users').get().id;
+ const ins=DB.sql.prepare("INSERT INTO products(id,owner_id,name,url,description,listing_status,created_at) VALUES(?,?,?,?,?,'approved',?)");
+ for(let i=0;i<400;i++)ins.run('p'+String(i).padStart(4,'0'),uid,'Tool '+i,'https://t'+i+'.example','A generic description for bulk product '+i,new Date(Date.UTC(2025,0,1)+i*3600e3).toISOString());
+ ins.run('needle','%s'.replace('%s',uid),'Zebra Ledger','https://zebra.example','Needle in the haystack bookkeeping tool','2020-01-01T00:00:00.000Z');
+ let r=await call(DB,'/discover/products?q=zebra');let d=await payload(r);assert.equal(d.total,1);assert.equal(d.products[0].id,'needle','oldest listing is still found');
+ r=await call(DB,'/discover/products?sort=recent&page=17');d=await payload(r);assert.equal(d.total,401);assert.equal(d.products.length,17,'last page via SQL paging');
+ r=await call(DB,'/discover/products?q=tool');d=await payload(r);assert.equal(d.total,401);assert.equal(d.products.length,24);
  DB.close();
 });

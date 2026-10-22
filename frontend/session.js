@@ -9,7 +9,7 @@ async function api(path,options={}){
  let r;try{r=await fetch(API+'/api/v1'+path,{...options,credentials:'include',headers:{'Content-Type':'application/json','X-Requested-With':'Requva',...(tok()?{Authorization:'Bearer '+tok()}:{}),...(options.headers||{})}})}
  catch{throw Object.assign(new Error('Could not reach Requva. Check your connection and try again.'),{status:0})}
  const d=await r.json().catch(()=>({}));
- if(!r.ok)throw Object.assign(new Error(d.error||'Request failed ('+r.status+')'),{status:r.status,code:d.code,capability:d.capability});
+ if(!r.ok){if(d.code==='TERMS_REQUIRED')document.dispatchEvent(new CustomEvent('requva:terms-required'));throw Object.assign(new Error(d.error||'Request failed ('+r.status+')'),{status:r.status,code:d.code,capability:d.capability})}
  return d}
 let mePromise=null;
 const me=force=>{if(!mePromise||force)mePromise=api('/auth/me').then(d=>d.user||null).catch(()=>null);return mePromise};

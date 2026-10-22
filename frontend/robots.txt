@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /testers
+Disallow: /admin
+Disallow: /leaving
+Disallow: /product.html
+
+Sitemap: https://requva.pages.dev/sitemap.xml

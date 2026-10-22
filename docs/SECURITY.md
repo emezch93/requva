@@ -50,3 +50,10 @@ The site (`requva.pages.dev`) and API (`workers.dev`) are different sites, so br
 - Listings younger than 14 days open a "You are leaving Requva" page before the outbound click is counted or followed.
 - Views and clicks ignore bots and empty user agents and count once per visitor per product per hour (a daily rotating hash, no raw IP stored).
 - Optional `ALERT_WEBHOOK_URL` (Worker secret, for example a Discord or Slack webhook) is called when a listing is held or auto held. Alerts never include emails.
+
+## Notifications and sharing
+
+- Notifications are created in the same database batch as the event that causes them where one exists, or immediately after a successful write. A unique key per user prevents duplicates. Routes only return the caller's own rows, and marking another user's notification returns 404.
+- Notification links must start with a single `/`; the UI rejects anything else.
+- Tester identity is never included in founder notifications.
+- Share links use the canonical `/p/<id>` URL with validated ids and fully encoded text. Nothing is posted to a social network by Requva.

@@ -28,3 +28,9 @@ Do not use real passwords, users, provider keys, or production data in local tes
 ## Page and responsive checks
 
 Check the distinct Pages URLs after deployment: `/`, `/discover.html`, `/dashboard.html`, `/testers.html`, and `/admin.html`. A guest who opens the founder workspace is sent to sign-in; a non-admin who opens the admin console is redirected to sign-in and the API still enforces the admin role. At phone widths, verify the menu button opens the page navigation and the workspace forms and cards stack to one column.
+
+## Automated tests
+
+- Worker and database: `cd worker && npm test` (SQLite backed, 20 tests).
+- Frontend and Pages Functions: `cd tests && npm install && npm test` (jsdom, 22 tests). These cover growth rendering, filters and URL state, sharing, notifications UI, product pages, link checks and the Pages Functions.
+- Not covered: real browsers, real Cloudflare D1, live deployment. Run the manual checks in `docs/DEPLOYMENT.md` after each release.

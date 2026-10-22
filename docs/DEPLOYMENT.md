@@ -57,3 +57,16 @@ Before deploying, back up D1: `cd worker && npx wrangler d1 export requva-produc
 2. Optional alerts: in the Worker dashboard add a secret named `ALERT_WEBHOOK_URL` containing a Discord or Slack incoming webhook URL. Without it, held listings are visible only in the admin console.
 3. After deploying, log out and log in once so the browser stores a bearer token. Test login on an iPhone in Safari.
 4. New pages: `leaving.html`, theme in `theme.css`, redesigned homepage with live listings from the API.
+
+## Release 3: launch readiness (migration 0010, Pages Functions)
+
+1. Back up D1, deploy as before. Migration 0010 adds the `notifications` table. Health should report `schemaVersion: 10`.
+2. Pages Functions: the repository root now has `functions/` (`p/[id].js`, `sitemap.xml.js`). Pages builds them automatically because the project root is the repository root and the output directory is `frontend`. If your Pages project uses another root, move `functions/` next to the output folder's parent.
+3. Optional but recommended: in the Pages project open Settings, Functions, Service bindings and add a binding named `API` pointing to the `requva` Worker. Without it the function fetches the Worker over its public address, which Cloudflare may refuse from the same account; shares then still work but link previews fall back to the generic page.
+4. Optional variable `SITE_URL` (for example `https://requva.pages.dev`) overrides canonical URLs.
+5. Set `contactEmail` in `frontend/config.js` if you want a contact address shown in the privacy notice.
+6. Verify after deploy:
+   - `curl -s https://requva.pages.dev/p/<a real product id> | grep og:title` shows the product name.
+   - `https://requva.pages.dev/sitemap.xml` lists `/p/...` URLs.
+   - `https://requva.pages.dev/robots.txt` loads.
+   - Log in, open the Alerts button, create feedback from a second account and see the alert.

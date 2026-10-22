@@ -1,0 +1,8 @@
+{
+  "name": "requva-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test --test-force-exit --test-timeout=30000" },
+  "devDependencies": { "jsdom": "^26.0.0" },
+  "engines": { "node": ">=22.13" }
+}

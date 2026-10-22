@@ -31,6 +31,6 @@ Check the distinct Pages URLs after deployment: `/`, `/discover.html`, `/dashboa
 
 ## Automated tests
 
-- Worker and database: `cd worker && npm test` (SQLite backed, 20 tests).
-- Frontend and Pages Functions: `cd tests && npm install && npm test` (jsdom, 22 tests). These cover growth rendering, filters and URL state, sharing, notifications UI, product pages, link checks and the Pages Functions.
+- Worker and database: `cd worker && npm test` (SQLite backed, 29 tests).
+- Frontend and Pages Functions: `cd tests && npm install && npm test` (jsdom, 36 tests). These cover growth rendering, filters and URL state, sharing, notifications UI, product pages, link checks and the Pages Functions.
 - Not covered: real browsers, real Cloudflare D1, live deployment. Run the manual checks in `docs/DEPLOYMENT.md` after each release.

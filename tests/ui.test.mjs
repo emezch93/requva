@@ -179,3 +179,152 @@ test('robots, sitemap and redirects exist and agree',()=>{
  assert.match(read('robots.txt'),/Sitemap: https:\/\/requva\.pages\.dev\/sitemap\.xml/);assert.match(read('_redirects'),/\/p\/\*\s+\/product\.html\s+200/);
  const sm=read('sitemap.xml');for(const u of ['/','/discover','/privacy','/terms'])assert.ok(sm.includes('https://requva.pages.dev'+u+'<'),u);
 });
+
+/* ================= messaging, terms, support, share tracking ================= */
+const iso=(h=0)=>new Date(Date.now()-h*3600e3).toISOString();
+const person=(name,role,location='')=>({name,role,location});
+function threadApi(state){return async(p,q,o,c)=>{
+ const method=o?.method||'GET';
+ if(p==='/auth/me')return res({user:state.user===undefined?user:state.user});
+ if(p==='/notifications')return res({notifications:[],unread_count:0,next_before:null});
+ if(p==='/threads')return res({threads:state.threads.filter(t=>q.get('filter')!=='unread'||t.unread>0),unread_total:state.threads.reduce((n,t)=>n+t.unread,0)});
+ const t=p.match(/^\/threads\/(voluntary|test)\/([\w-]+)$/);if(t&&method==='GET'){if(state.missing)return res({error:'Conversation not found.'},404);return res(state.thread)}
+ if(/\/read$/.test(p)){state.read=(state.read||0)+1;return res({ok:true})}
+ if(/\/messages$/.test(p)&&method==='POST'){if(state.replyError)return res({error:state.replyError},429);state.sent=JSON.parse(o.body).body;return res({message:{id:'m9'}},201)}
+ if((/^\/messages\//.test(p)||t)&&(method==='PATCH'||method==='DELETE')){state.mutations=(state.mutations||[]);state.mutations.push({method,p,body:o.body?JSON.parse(o.body):null});if(state.mutateError)return res({error:state.mutateError},409);return res({ok:true})}
+ return res({})}}
+const baseThread=()=>({thread:{type:'voluntary',id:'f1',product:{id:'p1',name:'ChatApp'},kind:'general',status:'visible',viewer_role:'sender',can_reply:true,edit_window_hours:24},unread_count:1,messages:[
+ {id:'f1',is_root:true,body:'Pricing page is confusing',deleted:false,created_at:iso(30),edited_at:iso(29),author:person('Uche User','Product user','Accra, Ghana'),mine:true,unread:false,seen:true,can_edit:false,can_delete:true},
+ {id:'m1',is_root:false,body:'Thanks <b>we will fix it</b>',deleted:false,created_at:iso(2),edited_at:null,author:person('Founder Fay','Founder','Lagos, Nigeria'),mine:false,unread:true,seen:false,can_edit:false,can_delete:false},
+ {id:'m2',is_root:false,body:'Great, thank you',deleted:false,created_at:iso(1),edited_at:null,author:person('Uche User','Product user','Accra, Ghana'),mine:true,unread:false,seen:false,can_edit:true,can_delete:true},
+ {id:'m3',is_root:false,body:null,deleted:true,created_at:iso(1),edited_at:null,author:person('Founder Fay','Founder'),mine:false,unread:false,seen:false,can_edit:false,can_delete:false}]});
+const listItem=(over={})=>({type:'voluntary',id:'f1',product:{id:'p1',name:'ChatApp'},status:'visible',viewer_role:'sender',counterpart:person('Founder Fay','Founder','Lagos, Nigeria'),preview:'Thanks we will fix it',last_activity:iso(2),reply_count:2,unread:1,...over});
+async function messagesPage(state,url='https://requva.pages.dev/dashboard.html'){const m=mount('dashboard.html',{url,fetch:threadApi(state),scripts:['session.js','messages.js']});await m.w.RequvaMessages.init();await tick(40);return m}
+test('messages: list shows counterpart name, role, location, product, preview, unread; filter and empty states',async()=>{
+ const state={threads:[listItem(),listItem({id:'f2',unread:0,counterpart:person('Ada','Tester','Abuja')})],thread:baseThread()};
+ const {w,d,calls}=await messagesPage(state);
+ const items=[...d.querySelectorAll('#msg-list .msg-item')];assert.equal(items.length,2);assert.equal(d.querySelector('#messages-panel').hidden,false);
+ assert.match(items[0].textContent,/Founder Fay/);assert.match(items[0].textContent,/Founder/);assert.match(items[0].textContent,/Lagos, Nigeria/);assert.match(items[0].textContent,/ChatApp/);assert.match(items[0].textContent,/2 replies/);assert.ok(items[0].classList.contains('unread'));assert.ok(!items[1].classList.contains('unread'));
+ assert.equal(d.querySelector('#msg-unread-count').textContent,'1');assert.equal(d.querySelector('#msg-unread-count').hidden,false);
+ d.querySelector('[data-filter=unread]').click();await tick(40);assert.equal(d.querySelectorAll('#msg-list .msg-item').length,1);assert.equal(calls.filter(c=>c.path==='/threads').at(-1).query.get('filter'),'unread');
+ state.threads=[];d.querySelector('[data-filter=unread]').click();await tick(40);assert.match(d.querySelector('#msg-list-status').textContent,/No unread messages/);
+ d.querySelector('[data-filter=all]').click();await tick(40);assert.match(d.querySelector('#msg-list-status').textContent,/No conversations yet/);
+});
+test('messages: thread shows names, roles, locations, date and time, edited, new, seen, deleted; text is escaped; marks read',async()=>{
+ const state={threads:[listItem()],thread:baseThread()};const {w,d,calls}=await messagesPage(state);
+ d.querySelector('#msg-list .msg-item').click();await tick(80);
+ const msgs=[...d.querySelectorAll('#msg-thread .msg')];assert.equal(msgs.length,4);
+ assert.match(msgs[0].querySelector('.msg-head').textContent,/Uche User.*Product user.*Accra, Ghana/s);assert.match(msgs[1].querySelector('.msg-head').textContent,/Founder Fay.*Founder.*Lagos, Nigeria/s);
+ assert.ok(msgs[0].querySelector('time').getAttribute('datetime')&&msgs[0].querySelector('time').textContent.length>6,'shows a date and time');
+ assert.match(msgs[0].textContent,/edited/);assert.match(msgs[0].textContent,/Seen/,'own message shows seen');assert.match(msgs[2].textContent,/Sent/,'own unseen message shows sent');
+ assert.ok(msgs[1].classList.contains('unread'));assert.match(msgs[1].textContent,/New/);assert.equal(msgs[1].querySelector('.msg-body').textContent,'Thanks <b>we will fix it</b>');assert.equal(msgs[1].querySelector('b'),null,'message HTML is escaped');
+ assert.match(msgs[3].textContent,/This message was deleted/);assert.equal(msgs[3].querySelector('[class*=msg-actions]'),null);
+ const label=m=>[...m.querySelectorAll('.msg-actions button')].map(b=>b.textContent);
+ assert.deepEqual(label(msgs[0]),['Delete'],'root can be deleted, edit window closed');assert.deepEqual(label(msgs[1]),[],'cannot edit or delete the other person\'s message');assert.deepEqual(label(msgs[2]),['Edit','Delete']);
+ assert.equal(state.read,1,'opening marks the conversation read');assert.ok(d.querySelector('#msg-layout').classList.contains('showing-thread'));
+ d.querySelector('.msg-back').click();assert.ok(!d.querySelector('#msg-layout').classList.contains('showing-thread'));
+});
+test('messages: reply, edit, delete call the right endpoints and show server errors',async()=>{
+ const state={threads:[listItem()],thread:baseThread()};const {w,d,calls}=await messagesPage(state);
+ d.querySelector('#msg-list .msg-item').click();await tick(80);
+ const ta=d.querySelector('#msg-reply-body');ta.value='Thanks again';ta.closest('form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick(80);assert.equal(state.sent,'Thanks again');
+ state.replyError='Too many messages. Try again later.';d.querySelector('#msg-reply-body').value='x';d.querySelector('#msg-reply-body').closest('form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick(60);assert.match(d.querySelector('.msg-reply .form-error').textContent,/Too many messages/);
+ const mine=[...d.querySelectorAll('#msg-thread .msg')][2];[...mine.querySelectorAll('.msg-actions button')].find(b=>b.textContent==='Edit').click();
+ const edit=d.querySelector('.msg-edit textarea');assert.equal(edit.value,'Great, thank you');edit.value='Great, thanks a lot';[...d.querySelectorAll('.msg-edit button')].find(b=>b.textContent==='Save').click();await tick(80);
+ assert.deepEqual(state.mutations.at(-1),{method:'PATCH',p:'/messages/m2',body:{body:'Great, thanks a lot'}});
+ const root=d.querySelectorAll('#msg-thread .msg')[0];[...root.querySelectorAll('.msg-actions button')].find(b=>b.textContent==='Delete').click();await tick(80);assert.deepEqual(state.mutations.at(-1),{method:'DELETE',p:'/threads/voluntary/f1',body:null},'root uses the thread endpoint');
+ w.confirm=()=>false;const before=state.mutations.length;[...d.querySelectorAll('#msg-thread .msg')][2].querySelectorAll('.msg-actions button')[1].click();await tick(40);assert.equal(state.mutations.length,before,'declining the confirmation deletes nothing');
+ state.mutateError='Messages can only be edited within 24 hours of sending.';w.confirm=()=>true;[...d.querySelectorAll('#msg-thread .msg')][2].querySelector('.msg-actions button').click();[...d.querySelectorAll('.msg-edit button')].find(b=>b.textContent==='Save').click();await tick(80);assert.match(d.querySelector('.msg-edit .form-error').textContent,/24 hours/);
+});
+test('messages: deep link opens the conversation, missing conversation and closed thread handled, hidden when logged out',async()=>{
+ let state={threads:[listItem()],thread:baseThread()};let m=await messagesPage(state,'https://requva.pages.dev/dashboard.html?thread=voluntary:f1');assert.equal(m.d.querySelectorAll('#msg-thread .msg').length,4,'deep link opened the thread');
+ state={threads:[listItem()],thread:baseThread(),missing:true};m=await messagesPage(state,'https://requva.pages.dev/dashboard.html?thread=voluntary:gone');assert.match(m.d.querySelector('#msg-thread [role=alert]').textContent,/no longer available/);
+ const closed=baseThread();closed.thread.can_reply=false;state={threads:[listItem()],thread:closed};m=await messagesPage(state,'https://requva.pages.dev/dashboard.html?thread=voluntary:f1');assert.equal(m.d.querySelector('#msg-reply-body'),null);assert.match(m.d.querySelector('#msg-thread').textContent,/closed/);
+ state={user:null,threads:[],thread:baseThread()};m=await messagesPage(state);assert.equal(m.d.querySelector('#messages-panel').hidden,true);
+ state={threads:[listItem()],thread:baseThread(),replyError:null};m=await messagesPage(state,'https://requva.pages.dev/dashboard.html?thread=../../x');assert.match(m.d.querySelector('#msg-thread').textContent,/Select a conversation/,'invalid deep link ignored');
+});
+
+/* ---------- terms and registration form ---------- */
+test('registration form: capability boxes are optional, terms box is required, name and location are optional, and the right data is sent',async()=>{
+ const m=mount('index.html',{url:'https://requva.pages.dev/',fetch:async(p,q,o)=>p==='/auth/me'?res({user:null}):p==='/auth/register'?res({user:{...user,terms:{required:false}},session_token:'tok'},201):res({products:[],campaigns:[]}),scripts:['session.js','app.js']});await tick(80);
+ const {d,w}=m;d.querySelector('[data-mode=register]').click();
+ const f=d.querySelector('#auth-form').elements;
+ const req=n=>[...d.querySelectorAll('#auth-form [name='+n+']')].map(x=>x.required);
+ assert.deepEqual(req('capabilities'),[false,false,false],'founder, product user and tester boxes must not be required');assert.deepEqual(req('accept_terms'),[true]);assert.deepEqual(req('display_name'),[false]);assert.deepEqual(req('location'),[false]);assert.deepEqual(req('recovery_answer'),[true]);assert.deepEqual(req('email'),[true]);
+ assert.ok(d.querySelector('#auth-form a[href="/terms.html"][target=_blank]'),'terms link opens in a new tab');assert.ok(d.querySelector('#auth-form a[href="/privacy.html"]'));
+ f.email.value='new@example.com';f.password.value='long-password-1234';f.recovery_question.value='school';f.recovery_answer.value='my private answer here';f.display_name.value='Ada';f.location.value='Lagos';f.accept_terms.checked=true;
+ d.querySelector('#auth-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await tick(120);
+ const sent=JSON.parse(m.calls.find(c=>c.path==='/auth/register').body);assert.equal(sent.accept_terms,true);assert.equal(sent.display_name,'Ada');assert.equal(sent.location,'Lagos');assert.deepEqual(sent.capabilities,['product_user'],'only the default box is ticked, and nothing else is forced');
+ d.querySelector('[data-mode=login]').click();assert.deepEqual(req('accept_terms'),[false]);assert.equal(d.querySelector('#auth-form [name=display_name]').disabled,true,'register only fields are disabled when logging in');
+});
+const termsUser=(required,accepted)=>({...user,terms:{current:'2026-10-22',accepted_version:accepted,accepted_at:accepted?iso(5):null,required}});
+test('terms page: opens, shows version, lets a logged in user read first then accept; acceptance is posted once',async()=>{
+ const posts=[];let required=true;
+ const api=async(p,q,o)=>{if(p==='/auth/me')return res({user:termsUser(required,required?null:'2026-10-22')});if(p==='/auth/terms/accept'){posts.push(JSON.parse(o.body));required=false;return res({ok:true})}return res({})};
+ const m=mount('terms.html',{url:'https://requva.pages.dev/terms.html',fetch:api,scripts:['session.js','terms.js']});m.w.document.dispatchEvent(new m.w.Event('DOMContentLoaded'));await tick(250);
+ const {d,w}=m;assert.match(d.querySelector('#terms-version').textContent,/2026-10-22/);assert.equal(d.querySelector('#terms-dialog'),null,'no blocking dialog on the page you need to read');
+ assert.ok(d.querySelector('#terms-status #terms-accept-box'));d.querySelector('#terms-accept-btn').click();await tick(40);assert.equal(posts.length,0,'must tick first');assert.match(d.querySelector('#terms-status .form-error').textContent,/Tick the box/);
+ d.querySelector('#terms-accept-box').checked=true;d.querySelector('#terms-accept-btn').click();d.querySelector('#terms-accept-btn')?.click();await tick(150);
+ assert.deepEqual(posts,[{version:'2026-10-22',accepted:true}]);assert.match(d.querySelector('#terms-status').textContent,/You accepted version 2026-10-22/);
+});
+test('terms: other pages show a blocking dialog until accepted; guests see a calm note; TERMS_REQUIRED reopens it',async()=>{
+ let required=true;const api=async(p,q,o)=>p==='/auth/me'?res({user:termsUser(required,null)}):p==='/auth/terms/accept'?(required=false,res({ok:true})):res({categories:[],products:[],total:0,page:1,page_size:24});
+ const m=mount('discover.html',{url:'https://requva.pages.dev/discover',fetch:api,scripts:['session.js','share.js','terms.js','directory.js']});m.w.document.dispatchEvent(new m.w.Event('DOMContentLoaded'));await tick(250);
+ const dlg=m.d.querySelector('#terms-dialog');assert.ok(dlg);assert.ok(dlg.querySelector('a[href="/terms.html"][target=_blank]'));
+ dlg.querySelector('#terms-accept-box').checked=true;dlg.querySelector('#terms-accept-btn').click();await tick(200);assert.equal(m.d.querySelector('#terms-dialog'),null);
+ required=true;m.w.document.dispatchEvent(new m.w.CustomEvent('requva:terms-required'));await tick(120);assert.ok(m.d.querySelector('#terms-dialog'),'server refusal reopens the dialog');
+ const g=mount('terms.html',{url:'https://requva.pages.dev/terms.html',fetch:async p=>p==='/auth/me'?res({user:null}):res({}),scripts:['session.js','terms.js']});g.w.document.dispatchEvent(new g.w.Event('DOMContentLoaded'));await tick(200);assert.match(g.d.querySelector('#terms-status').textContent,/Log in or create an account/);
+});
+test('terms version in the page matches the version the server enforces',()=>{
+ const worker=fs.readFileSync(new URL('../worker/src/index.js',import.meta.url),'utf8'),v=worker.match(/TERMS_VERSION='([\d-]+)'/)[1];
+ assert.match(read('terms.html'),new RegExp('data-version="'+v+'"'));assert.match(read('terms.html'),new RegExp('Version '+v));
+});
+
+/* ---------- support email ---------- */
+const EMAIL='support.requva@gmail.com';
+test('support email: used everywhere, links are valid, and no page claims emails are sent',()=>{
+ assert.match(read('config.js'),new RegExp("contactEmail: '"+EMAIL.replace(/\./g,'\\.')+"'"));
+ for(const f of pages){const h=read(f);assert.ok(h.includes('href="/contact.html"'),f+' footer support link');
+  for(const m of h.matchAll(/mailto:([^"?]+)(\?[^"]*)?"/g)){assert.equal(m[1],EMAIL,f+' only the support address is used');if(m[2])assert.ok(!/\s/.test(m[2]),f+' mailto query is encoded')}
+  const emails=[...h.replace(/<script.*?<\/script>/gs,'').matchAll(/[\w.+-]+@[\w-]+\.[\w.]+/g)].map(x=>x[0]);for(const e of emails)assert.equal(e,EMAIL,f+' stray address '+e)}
+ const contact=read('contact.html');assert.ok(contact.includes('mailto:'+EMAIL));assert.match(contact,/does not send automatic emails/);
+ for(const f of pages){const text=read(f).replace(/<[^>]+>/g,' ');assert.ok(!/we will email you|we have emailed|check your inbox|confirmation email|sent you an email/i.test(text),f+' must not claim emails are sent')}
+ for(const f of ['app.js','directory.js','growth.js','messages.js','share.js','terms.js','notifications.js'])assert.ok(!/@gmail|@yahoo|@outlook/.test(read(f)),f+' no hard coded personal address');
+});
+test('sitemap lists the contact page',()=>{assert.ok(read('sitemap.xml').includes('https://requva.pages.dev/contact<'));assert.match(fs.readFileSync(new URL('../functions/sitemap.xml.js',import.meta.url),'utf8'),/'\/contact'/)});
+
+/* ---------- share tracking (browser side) ---------- */
+const shareCalls=c=>c.filter(x=>x.path.startsWith('/discover/share/')).map(x=>({path:x.path,...JSON.parse(x.body)}));
+test('share tracking: each option records once with its method and source; copy only on success; native only when it completes',async()=>{
+ const api=async()=>res({ok:true,counted:true},201);const p={id:'p000001',name:'Ledger',description:'Invoices'};
+ let m=mount('discover.html',{fetch:api,scripts:['session.js','share.js'],pre:w=>{Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async()=>{}},configurable:true})}});
+ m.w.RequvaShare.open(p,{source:'directory'});for(const id of ['share-whatsapp','share-whatsapp','share-email','share-gmail','share-x','share-linkedin','share-facebook'])m.d.querySelector('#'+id).dispatchEvent(new m.w.MouseEvent('click',{bubbles:true,cancelable:true}));
+ m.d.querySelector('#share-copy').click();m.d.querySelector('#share-copy').click();await tick(40);
+ const sent=shareCalls(m.calls);assert.deepEqual(sent.map(s=>s.method),['whatsapp','email','gmail','x','linkedin','facebook','copy_link'],'double clicks are counted once');assert.ok(sent.every(s=>s.source==='directory'&&s.path==='/discover/share/p000001'));
+ m=mount('discover.html',{fetch:api,scripts:['session.js','share.js'],pre:w=>{Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async()=>{throw new Error('no')}},configurable:true});w.document.execCommand=()=>false}});
+ m.w.RequvaShare.open(p,{source:'detail'});m.d.querySelector('#share-copy').click();await tick(40);assert.equal(shareCalls(m.calls).length,0,'failed copy is not counted');
+ m=mount('discover.html',{fetch:api,scripts:['session.js','share.js'],pre:w=>{w.navigator.share=async()=>{const e=new Error('cancelled');e.name='AbortError';throw e}}});m.w.RequvaShare.open(p);m.d.querySelector('#share-native').click();await tick(40);assert.equal(shareCalls(m.calls).length,0,'cancelled native share is not counted');
+ m=mount('discover.html',{fetch:api,scripts:['session.js','share.js'],pre:w=>{w.navigator.share=async()=>{}}});m.w.RequvaShare.open(p,{source:'bogus'});m.d.querySelector('#share-native').click();await tick(40);assert.deepEqual(shareCalls(m.calls).map(s=>[s.method,s.source]),[['native','direct']]);
+ m=mount('discover.html',{fetch:async()=>res({error:'down'},500),scripts:['session.js','share.js']});m.w.RequvaShare.open(p);m.d.querySelector('#share-x').dispatchEvent(new m.w.MouseEvent('click',{bubbles:true,cancelable:true}));await tick(40);assert.ok(m.d.querySelector('#share-dialog'),'a failing tracker never breaks sharing');
+});
+test('growth: shares section shows totals, methods, dates and the honest explanation; tolerates missing data',async()=>{
+ const {w,d}=await growthPage(async()=>res({}));
+ const full={...growthFull,sharing:{total:3,all_time:10,by_method:[{method:'whatsapp',count:2},{method:'copy_link',count:1}],recent:[{method:'whatsapp',created_at:iso(1)},{method:'copy_link',created_at:iso(2)}],note:'Counts clicks on the share buttons inside Requva. It does not show whether anyone opened or shared the product elsewhere.'}};
+ const show=data=>{const host=d.createElement('div');host.append(...w.RequvaGrowth.render(data));return host};
+ let host=show(full);const sec=[...host.querySelectorAll('section')].find(s=>/Shares through Requva/.test(s.textContent));assert.ok(sec);
+ const cards=Object.fromEntries([...sec.querySelectorAll('.metric')].map(c=>[c.querySelector('span').textContent,c.querySelector('strong').textContent]));assert.equal(cards['Shares in this period'],'3');assert.equal(cards['Shares all time'],'10');assert.equal(cards['WhatsApp'],'2');assert.equal(cards['Copy link'],'1');
+ assert.equal(sec.querySelectorAll('.share-recent li').length,2);assert.match(sec.querySelector('.share-recent li').textContent,/WhatsApp ·/);assert.match(sec.textContent,/does not show whether anyone opened or shared/);
+ host=show({...full,sharing:{total:0,all_time:0,by_method:[],recent:[]}});assert.match(host.textContent,/No shares recorded in this period/);assert.ok(!/\[object|undefined|NaN/.test(textOf(host)));
+ host=show({...full,sharing:null});assert.match(host.textContent,/Unavailable.*Share data/);
+});
+test('dashboard product card shows the all time share count',async()=>{
+ const api=async(p,q)=>{if(p==='/auth/me')return res({user});if(p==='/products')return res({products:[{id:'p1',name:'Mine',url:'https://m.example',description:'d',stage:'launched',status:'active',listing_status:'approved',share_count:4,seeking:''}]});if(p==='/discover/products')return res({products:[],total:0,page:1,page_size:24});return res({products:[],campaigns:[],requests:[],activities:[],opportunities:[],feedback:[]})};
+ const m=mount('dashboard.html',{url:'https://requva.pages.dev/dashboard.html',fetch:api,scripts:['session.js','share.js','app.js']});await tick(250);
+ assert.match(m.d.querySelector('#product-list').textContent,/Shares through Requva tools: 4/);
+});
+test('profile form in account settings saves display name and location',async()=>{
+ let saved=null;const api=async(p,q,o)=>{if(p==='/auth/me')return res({user:{...user,display_name:'Ada',location:'Lagos',terms:{required:false,accepted_version:'2026-10-22',accepted_at:iso(3)}}});if(p==='/auth/profile'){saved=JSON.parse(o.body);return res({ok:true,...saved})}if(p==='/discover/products')return res({products:[],total:0,page:1,page_size:24});return res({products:[],campaigns:[],requests:[],activities:[],opportunities:[],feedback:[]})};
+ const m=mount('dashboard.html',{url:'https://requva.pages.dev/dashboard.html',fetch:api,scripts:['session.js','share.js','app.js']});await tick(250);
+ m.d.querySelector('#account-settings').click();const pf=m.d.querySelector('#profile-form');assert.equal(pf.elements.display_name.value,'Ada');assert.equal(pf.elements.location.value,'Lagos');assert.match(m.d.querySelector('#settings-terms').textContent,/accepted/);
+ pf.elements.display_name.value='Ada O.';pf.elements.location.value='Abuja';pf.dispatchEvent(new m.w.Event('submit',{cancelable:true}));await tick(120);assert.deepEqual(saved,{display_name:'Ada O.',location:'Abuja'});
+});

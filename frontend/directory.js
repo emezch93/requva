@@ -9,7 +9,7 @@ const badge=(t,cls='')=>el('span',{class:'dir-badge '+cls,text:t});
 const productPath=id=>'/p/'+encodeURIComponent(id);
 function nav(){const toggle=$('#menu-toggle'),menu=$('#primary-nav');toggle?.addEventListener('click',()=>{const o=menu.classList.toggle('open');toggle.setAttribute('aria-expanded',String(o))});
  R.me().then(u=>{document.querySelectorAll('[data-auth-only]').forEach(x=>x.hidden=!u);document.querySelectorAll('[data-guest-only]').forEach(x=>x.hidden=!!u)});const y=$('#year');if(y)y.textContent=new Date().getFullYear()}
-function card(p,src){const visit=R.API+p.visit_url+'?src='+src,share=el('button',{type:'button',class:'button button-quiet','data-share':p.id,'aria-label':'Share '+p.name},'Share');share.addEventListener('click',()=>window.RequvaShare?.open(p));
+function card(p,src){const visit=R.API+p.visit_url+'?src='+src,share=el('button',{type:'button',class:'button button-quiet','data-share':p.id,'aria-label':'Share '+p.name},'Share');share.addEventListener('click',()=>window.RequvaShare?.open(p,{source:'directory'}));
  return el('article',{class:'dir-card'},el('h3',{},el('a',{href:productPath(p.id)},p.name)),el('p',{class:'dir-tagline',text:p.tagline||(p.description||'').slice(0,140)}),
   el('div',{class:'dir-badges'},p.pricing_model&&badge(PRICING[p.pricing_model]||p.pricing_model),badge(STAGE[p.stage]||p.stage),p.testing_request_id&&badge('Open for testers','dir-badge-lime'),(p.seeking||[]).filter(x=>x!=='testers').map(x=>badge(SEEKING[x]||x))),
   el('div',{class:'dir-actions'},el('a',{class:'button button-dark',href:visit,target:'_blank',rel:'noopener noreferrer'},'Visit product ↗'),share,el('a',{class:'text-link',href:productPath(p.id)},'Details')))}
@@ -52,7 +52,7 @@ async function detail(){
  if(!id){root.replaceChildren(el('p',{class:'dir-error',role:'alert'},'This product link is not valid. ',el('a',{href:'/discover.html'},'Browse products')));return}
  try{const{product:p}=await api('/discover/products/'+encodeURIComponent(id));document.title=p.name+' — Requva';
   api('/discover/view/'+encodeURIComponent(id)+'?src=detail',{method:'POST',body:'{}'}).catch(()=>{});
-  const t=p.testing,share=el('button',{type:'button',class:'button button-quiet',id:'detail-share'},'Share');share.addEventListener('click',()=>window.RequvaShare?.open(p));
+  const t=p.testing,share=el('button',{type:'button',class:'button button-quiet',id:'detail-share'},'Share');share.addEventListener('click',()=>window.RequvaShare?.open(p,{source:'detail'}));
   root.replaceChildren(el('a',{class:'text-link',href:'/discover.html'},'← All products'),el('h1',{text:p.name}),p.tagline&&el('p',{class:'dir-tagline',text:p.tagline}),
    el('div',{class:'dir-badges'},p.pricing_model&&badge(PRICING[p.pricing_model]||p.pricing_model),badge(STAGE[p.stage]||p.stage),p.supported_region&&badge(p.supported_region),t&&badge('Open for testers','dir-badge-lime'),(p.seeking||[]).map(x=>badge(SEEKING[x]||x))),
    el('div',{class:'dir-actions'},el('a',{class:'button button-dark',href:R.API+p.visit_url+'?src=detail',target:'_blank',rel:'noopener noreferrer'},'Visit product ↗'),share,t&&el('a',{class:'button button-lime',href:'/testers.html'},'Test this product'),el('span',{class:'dir-host',text:p.website_host})),
@@ -64,6 +64,5 @@ async function leaving(){const root=$('#leaving-root'),q=new URLSearchParams(loc
  try{const{product:p}=await api('/discover/products/'+encodeURIComponent(id)),src=['search','detail','explore','direct'].includes(q.get('src'))?q.get('src'):'direct';
   root.replaceChildren(el('span',{class:'section-kicker',text:'Heads up'}),el('h1',{text:'You are leaving Requva'}),el('p',{},'You are about to open ',el('strong',{text:p.name}),' at:'),el('p',{},el('span',{class:'host',text:p.website_host})),el('p',{class:'form-note',text:'This listing is new. Requva checks listings automatically but does not verify them or the sites they link to. Do not enter passwords or payment details unless you trust the site.'}),el('div',{class:'dir-actions'},el('a',{class:'button button-dark',href:R.API+p.visit_url+'?src='+src+'&confirm=1',rel:'noopener noreferrer'},'Continue to site ↗'),el('a',{class:'text-link',href:productPath(id)},'Back to listing')))}
  catch(e){root.replaceChildren(el('p',{class:'dir-error',role:'alert'},e.status===404?'This product is no longer available.':e.message,' ',el('a',{href:'/discover.html'},'Browse products')))}}
-const cl=$('#contact-line');if(cl&&window.REQUVA_CONFIG?.contactEmail)cl.replaceChildren('email ',el('a',{href:'mailto:'+window.REQUVA_CONFIG.contactEmail,text:window.REQUVA_CONFIG.contactEmail}));
 nav();if($('#dir-form'))directory();if($('#product-root'))detail();if($('#leaving-root'))leaving();
 })();

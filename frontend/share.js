@@ -20,17 +20,17 @@ let dialog=null,current=null;
 function ensure(){if(dialog)return dialog;
  dialog=el('dialog',{id:'share-dialog','aria-labelledby':'share-title',class:'share-dialog'});document.body.append(dialog);
  dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close?.()});return dialog}
-function open(p){
- if(!p||!validId(p.id))return;current=p;const l=links(p),d=ensure(),status=el('p',{class:'form-note',role:'status','aria-live':'polite',id:'share-status'}),input=el('input',{type:'text',readonly:true,value:l.url,'aria-label':'Product link',id:'share-link'});input.value=l.url;
+function open(p,opts={}){
+ if(!p||!validId(p.id))return;current=p;const source=['directory','detail','workspace'].includes(opts.source)?opts.source:'direct',sent=new Set(),track=m=>{if(sent.has(m))return;sent.add(m);R.api('/discover/share/'+encodeURIComponent(p.id),{method:'POST',body:JSON.stringify({method:m,source}),keepalive:true}).catch(()=>{})};const l=links(p),d=ensure(),status=el('p',{class:'form-note',role:'status','aria-live':'polite',id:'share-status'}),input=el('input',{type:'text',readonly:true,value:l.url,'aria-label':'Product link',id:'share-link'});input.value=l.url;
  const copyBtn=el('button',{type:'button',class:'button button-dark',id:'share-copy'},'Copy link');
- copyBtn.addEventListener('click',async()=>{const ok=await copy(l.url,input);status.textContent=ok?'Link copied.':'Copying was blocked by your browser. The link is selected, press Ctrl+C or long press to copy it.'});
- const a=(label,href,id)=>el('a',{class:'button button-quiet',href,target:'_blank',rel:'noopener noreferrer',id},label);
+ copyBtn.addEventListener('click',async()=>{const ok=await copy(l.url,input);if(ok)track('copy_link');status.textContent=ok?'Link copied.':'Copying was blocked by your browser. The link is selected, press Ctrl+C or long press to copy it.'});
+ const a=(label,href,id,method)=>{const n=el('a',{class:'button button-quiet',href,target:'_blank',rel:'noopener noreferrer',id},label);n.addEventListener('click',()=>track(method));return n};
  const close=el('button',{type:'button',class:'text-link','aria-label':'Close share dialog'},'Close');close.addEventListener('click',()=>d.close?d.close():d.removeAttribute('open'));
  const native=typeof navigator.share==='function'?el('button',{type:'button',class:'button button-lime',id:'share-native'},'Share using your device'):null;
- native?.addEventListener('click',async()=>{try{await navigator.share({title:p.name,text:l.text,url:l.url})}catch(e){if(e&&e.name!=='AbortError')status.textContent='Device sharing failed. Use one of the options below.'}});
+ native?.addEventListener('click',async()=>{try{await navigator.share({title:p.name,text:l.text,url:l.url});track('native')}catch(e){if(e&&e.name!=='AbortError')status.textContent='Device sharing failed. Use one of the options below.'}});
  d.replaceChildren(el('h2',{id:'share-title',text:'Share '+p.name}),el('div',{class:'share-copy'},input,copyBtn),native,
-  el('div',{class:'share-grid'},a('WhatsApp',l.whatsapp,'share-whatsapp'),a('Email',l.email,'share-email'),a('Gmail',l.gmail,'share-gmail'),a('X',l.x,'share-x'),a('LinkedIn',l.linkedin,'share-linkedin'),a('Facebook',l.facebook,'share-facebook')),
-  el('p',{class:'form-note',text:'These buttons open each service\u2019s share screen with the text filled in. Nothing is posted until you confirm there.'}),status,close);
+  el('div',{class:'share-grid'},a('WhatsApp',l.whatsapp,'share-whatsapp','whatsapp'),a('Email',l.email,'share-email','email'),a('Gmail',l.gmail,'share-gmail','gmail'),a('X',l.x,'share-x','x'),a('LinkedIn',l.linkedin,'share-linkedin','linkedin'),a('Facebook',l.facebook,'share-facebook','facebook')),
+  el('p',{class:'form-note',text:'These buttons open each service\u2019s share screen with the text filled in. Nothing is posted until you confirm there. Requva counts uses of these buttons so the founder can see a share total; it cannot see what happens afterwards.'}),status,close);
  if(d.showModal){if(!d.open)d.showModal()}else d.setAttribute('open','')}
 window.RequvaShare={urlFor,links,copy,open,validId};
 })();

@@ -17,6 +17,7 @@ function database(){
  sql.exec(readFileSync(new URL('../migrations/0008_general_feedback.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0009_hardening.sql',import.meta.url),'utf8'));
  sql.exec(readFileSync(new URL('../migrations/0010_notifications.sql',import.meta.url),'utf8'));
+ sql.exec(readFileSync(new URL('../migrations/0011_messaging_terms_shares.sql',import.meta.url),'utf8'));
  const prepare=query=>{let params=[];return{bind(...values){params=values;return this},run(){const r=sql.prepare(query).run(...params);return{...r,meta:{changes:Number(r.changes)}}},first(){return sql.prepare(query).get(...params)??null},all(){return{results:sql.prepare(query).all(...params)}}}};
  return{prepare,batch(statements){sql.exec('SAVEPOINT d1_batch');try{const out=statements.map(s=>s.run());sql.exec('RELEASE d1_batch');return out}catch(error){sql.exec('ROLLBACK TO d1_batch');sql.exec('RELEASE d1_batch');throw error}},close(){sql.close()},sql};
 }
@@ -30,7 +31,7 @@ const cookie=r=>{const value=r.headers.get('Set-Cookie');assert.ok(value,'expect
 const payload=r=>r.json();
 const recovery={recovery_question:'private_phrase',recovery_answer:'a long secret phrase I can remember'};
 async function signup(DB,email='owner@example.com'){
- const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',capabilities:['founder','product_user','tester'],...recovery}});
+ const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',accept_terms:true,capabilities:['founder','product_user','tester'],...recovery}});
  assert.equal(r.status,201,await r.clone().text());return{cookie:cookie(r),user:(await payload(r)).user};
 }
 
@@ -57,7 +58,7 @@ test('product, campaign, tester, consent feedback, analytics, and duplicate-safe
  r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
- const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,10);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
+ const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,11);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
  const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
@@ -186,7 +187,7 @@ test('migration 0005 releases legacy pending listings that pass screening and pr
 
 test('unified accounts: capabilities chosen at signup, activated later, enforced server-side',async()=>{
  const DB=database();
- let r=await call(DB,'/auth/register',{method:'POST',body:{email:'multi@example.com',password:'founder-password-123',capabilities:['product_user','bogus'],...recovery}});assert.equal(r.status,201);
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'multi@example.com',password:'founder-password-123',accept_terms:true,capabilities:['product_user','bogus'],...recovery}});assert.equal(r.status,201);
  const c=cookie(r);assert.deepEqual((await payload(r)).user.capabilities,['product_user']);
  const product={name:'Capable',url:'https://capable.example',description:'A product made by a later founder'};
  r=await call(DB,'/products',{method:'POST',headers:{Cookie:c},body:product});assert.equal(r.status,403);assert.equal((await payload(r)).code,'CAPABILITY_REQUIRED');
@@ -282,7 +283,7 @@ test('growth workspace: honest metrics, funnel states, unconfigured tracking, ow
 
 test('hardening: bearer sessions work without cookies, young account limits, stricter screening, admin alerts',async()=>{
  const DB=database();
- let r=await call(DB,'/auth/register',{method:'POST',body:{email:'bearer@example.com',password:'founder-password-123',capabilities:['founder','product_user'],...recovery}});const token=(await payload(r)).session_token;assert.ok(token);
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'bearer@example.com',password:'founder-password-123',accept_terms:true,capabilities:['founder','product_user'],...recovery}});const token=(await payload(r)).session_token;assert.ok(token);
  r=await call(DB,'/auth/me',{headers:{Authorization:'Bearer '+token}});assert.equal((await payload(r)).user.email,'bearer@example.com','bearer token authenticates without any cookie');
  r=await call(DB,'/auth/me',{headers:{Authorization:'Bearer wrong'}});assert.equal((await payload(r)).user,null);
  r=await call(DB,'/auth/login',{method:'POST',body:{email:'bearer@example.com',password:'founder-password-123'}});assert.ok((await payload(r)).session_token);
@@ -327,7 +328,7 @@ test('notifications: created by real events, owner only, read state, paging, no 
  r=await call(DB,'/feedback',{method:'POST',headers:{Cookie:t1.cookie},body:{product_id:pid,body:'The checkout button is hidden on small screens',consent:true}});assert.equal(r.status,201);
  r=await call(DB,'/discover/products/'+pid+'/feedback',{method:'POST',headers:{Cookie:u1.cookie},body:{body:'Love the idea, please add an export option',kind:'idea'}});const gid=(await payload(r)).feedback.id;
  d=await list(f);assert.deepEqual(d.notifications.map(n=>n.type).sort(),['feedback_new','test_completed','test_started','tester_opted_in']);assert.equal(d.unread_count,4);
- assert.ok(d.notifications.every(n=>n.link.startsWith('/dashboard.html?product='+pid)),'links point at the product workspace');
+ assert.ok(d.notifications.every(n=>n.link.startsWith('/dashboard.html?product='+pid)||/^\/dashboard\.html\?thread=(voluntary|test):[\w-]+#messages-panel$/.test(n.link)),'links point at the product workspace or the conversation');
  assert.equal((await list(other)).notifications.length,0,'another founder sees nothing');assert.equal((await list(t1)).notifications.length,0);
  const nid=d.notifications[0].id;
  r=await call(DB,'/notifications/'+nid+'/read',{method:'POST',headers:{Cookie:other.cookie}});assert.equal(r.status,404,'cannot mark another user\'s notification');
@@ -336,8 +337,8 @@ test('notifications: created by real events, owner only, read state, paging, no 
  d=await list(f,'?limit=2');assert.equal(d.notifications.length,2);assert.ok(d.next_before);d=await list(f,'?limit=2&before='+encodeURIComponent(d.next_before));assert.equal(d.notifications.length,2);assert.equal(d.next_before,null);
  r=await call(DB,'/products/'+pid+'/general-feedback/'+gid+'/respond',{method:'POST',headers:{Cookie:f.cookie},body:{response:'Export is planned.'}});assert.equal(r.status,200);
  r=await call(DB,'/products/'+pid+'/general-feedback/'+gid+'/respond',{method:'POST',headers:{Cookie:f.cookie},body:{response:'Export is planned.'}});assert.equal(r.status,200);
- d=await list(u1);assert.equal(d.notifications.length,1,'author notified once, identical reply not duplicated');assert.equal(d.notifications[0].type,'feedback_response');
- r=await call(DB,'/notifications/read-all',{method:'POST',headers:{Cookie:f.cookie}});assert.equal((await payload(r)).updated,3);assert.equal((await list(f)).unread_count,0);assert.equal((await list(u1)).unread_count,1,'read-all affects only the caller');
+ d=await list(u1);assert.equal(d.notifications.length,2,'each founder reply notifies the author once');assert.ok(d.notifications.every(n=>n.type==='message_reply'));assert.match(d.notifications[0].link,/thread=voluntary:/);
+ r=await call(DB,'/notifications/read-all',{method:'POST',headers:{Cookie:f.cookie}});assert.equal((await payload(r)).updated,3);assert.equal((await list(f)).unread_count,0);assert.equal((await list(u1)).unread_count,2,'read-all affects only the caller');
  r=await call(DB,'/notifications');assert.equal(r.status,401);
  r=await call(DB,'/auth/password',{method:'POST',headers:{Cookie:f.cookie},body:{current_password:'founder-password-123',new_password:'another-long-password-456'}});assert.equal(r.status,200);f.cookie=cookie(r);
  assert.ok((await list(f)).notifications.some(n=>n.type==='security'),'password change raises a security notification');
@@ -398,5 +399,157 @@ test('growth dashboard: configured vs unconfigured, zero vs missing, per product
  await send('visit','v1');await send('visit','v2');await send('signup','s1');
  let d=await g(p1);assert.equal(d.acquisition.configured,true);assert.equal(d.acquisition.visits,2);assert.equal(d.acquisition.signups,1);assert.equal(d.acquisition.activations,0,'configured with no activations is zero, not unavailable');
  d=await g(p2);assert.equal(d.acquisition.configured,false,'other product is not affected by this product\'s token');assert.equal(d.acquisition.signups,undefined);
+ DB.close();
+});
+
+test('notification paging is stable when many notifications share one timestamp',async()=>{
+ const DB=database(),f=await signup(DB,'tie@example.com');const uid=DB.sql.prepare('SELECT id FROM users').get().id;
+ const ins=DB.sql.prepare("INSERT INTO notifications(id,user_id,type,title,dedupe_key,created_at) VALUES(?,?,?,?,?,?)");
+ for(let i=0;i<7;i++)ins.run('n'+i,uid,'x','Same time '+i,'k'+i,'2026-10-21T10:00:00.000Z');
+ ins.run('older',uid,'x','Older','kold','2026-10-21T09:00:00.000Z');
+ const seen=[];let before='',guard=0;do{const r=await call(DB,'/notifications?limit=3'+(before?'&before='+encodeURIComponent(before):''),{headers:{Cookie:f.cookie}});const d=await payload(r);seen.push(...d.notifications.map(n=>n.id));before=d.next_before||'';guard++}while(before&&guard<10);
+ assert.equal(seen.length,8);assert.equal(new Set(seen).size,8,'no duplicates and none skipped across pages');
+ const r=await call(DB,'/notifications?before=2026-10-21T10:00:00.000Z',{headers:{Cookie:f.cookie}});assert.equal((await payload(r)).notifications.length,8,'malformed cursor is ignored safely');
+ DB.close();
+});
+
+/* ---------- messaging, profiles, terms, share tracking ---------- */
+const reg=async(DB,email,extra={})=>{const r=await call(DB,'/auth/register',{method:'POST',body:{email,password:'founder-password-123',capabilities:['founder','product_user','tester'],...recovery,...extra}});return {r,cookie:cookie(r),user:(await payload(r.clone?.()||r))?.user}};
+test('terms: registration requires acceptance, acceptance is recorded, old accounts must accept before writing',async()=>{
+ const DB=database();
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'noterms@example.com',password:'founder-password-123',capabilities:['founder'],...recovery}});assert.equal(r.status,400);assert.match((await payload(r)).error,/Terms of use/);
+ r=await call(DB,'/auth/register',{method:'POST',body:{email:'noterms@example.com',password:'founder-password-123',accept_terms:'yes',capabilities:['founder'],...recovery}});assert.equal(r.status,400,'only a real boolean true counts');
+ const a=await reg(DB,'terms@example.com',{accept_terms:true});assert.equal(a.r.status,201);
+ let me=await payload(await call(DB,'/auth/me',{headers:{Cookie:a.cookie}}));assert.equal(me.user.terms.required,false);assert.equal(me.user.terms.accepted_version,'2026-10-22');assert.ok(me.user.terms.accepted_at);
+ const row=DB.sql.prepare("SELECT version,method FROM terms_acceptances WHERE user_id=(SELECT id FROM users WHERE email='terms@example.com')").get();assert.deepEqual({...row},{version:'2026-10-22',method:'registration'});
+ // simulate an account created before terms were recorded
+ DB.sql.prepare("UPDATE users SET terms_version='',terms_accepted_at=NULL WHERE email='terms@example.com'").run();
+ me=await payload(await call(DB,'/auth/me',{headers:{Cookie:a.cookie}}));assert.equal(me.user.terms.required,true);
+ const post=()=>call(DB,'/products',{method:'POST',headers:{Cookie:a.cookie},body:{name:'Termed',url:'https://termed.example',description:'Needs accepted terms first'}});
+ r=await post();assert.equal(r.status,403);assert.equal((await payload(r)).code,'TERMS_REQUIRED');
+ assert.equal((await call(DB,'/products',{headers:{Cookie:a.cookie}})).status,200,'reading still works');
+ assert.equal((await call(DB,'/notifications/read-all',{method:'POST',headers:{Cookie:a.cookie}})).status,200,'notification reads are exempt');
+ r=await call(DB,'/auth/terms/accept',{method:'POST',headers:{Cookie:a.cookie},body:{version:'2000-01-01',accepted:true}});assert.equal(r.status,409,'stale version refused');
+ r=await call(DB,'/auth/terms/accept',{method:'POST',headers:{Cookie:a.cookie},body:{version:'2026-10-22',accepted:false}});assert.equal(r.status,400);
+ r=await call(DB,'/auth/terms/accept',{method:'POST',headers:{Cookie:a.cookie},body:{version:'2026-10-22',accepted:true}});assert.equal(r.status,200);
+ assert.equal((await post()).status,201,'writes work after acceptance');
+ const rows=DB.sql.prepare("SELECT method FROM terms_acceptances WHERE user_id=(SELECT id FROM users WHERE email='terms@example.com') ORDER BY accepted_at").all().map(x=>x.method);assert.deepEqual(rows,['registration','prompt']);
+ assert.equal((await call(DB,'/auth/terms/accept',{method:'POST',body:{version:'2026-10-22',accepted:true}})).status,401,'guests cannot accept');
+ DB.close();
+});
+test('profiles: name and location are optional, cleaned, never an email, and shown to the other side',async()=>{
+ const DB=database();
+ let r=await call(DB,'/auth/register',{method:'POST',body:{email:'p1@example.com',password:'founder-password-123',accept_terms:true,display_name:'me@leak.com',capabilities:['founder'],...recovery}});assert.equal(r.status,400,'email as display name refused');
+ const f=await reg(DB,'pf@example.com',{accept_terms:true,display_name:'  Ada   <b>Obi</b> ',location:'Lagos, Nigeria'});assert.equal(f.r.status,201);
+ let me=(await payload(await call(DB,'/auth/me',{headers:{Cookie:f.cookie}}))).user;assert.equal(me.display_name,'Ada bObi/b','markup characters stripped');assert.equal(me.location,'Lagos, Nigeria');
+ r=await call(DB,'/auth/profile',{method:'PATCH',headers:{Cookie:f.cookie},body:{display_name:'Ada O.',location:''}});assert.equal(r.status,200);
+ me=(await payload(await call(DB,'/auth/me',{headers:{Cookie:f.cookie}}))).user;assert.equal(me.display_name,'Ada O.');assert.equal(me.location,'');
+ r=await call(DB,'/auth/profile',{method:'PATCH',headers:{Cookie:f.cookie},body:{display_name:'x',location:'a@b.co'}});assert.equal(r.status,400);
+ assert.equal((await call(DB,'/auth/profile',{method:'PATCH',body:{display_name:'x'}})).status,401);
+ DB.close();
+});
+async function convo(){const DB=database(),f=await signup(DB,'mf@example.com'),u=await signup(DB,'mu@example.com'),x=await signup(DB,'mx@example.com');old(DB);
+ DB.sql.prepare("UPDATE users SET display_name='Founder Fay',location='Lagos, Nigeria' WHERE email='mf@example.com'").run();DB.sql.prepare("UPDATE users SET display_name='Uche User',location='Accra, Ghana' WHERE email='mu@example.com'").run();
+ let r=await call(DB,'/products',{method:'POST',headers:{Cookie:f.cookie},body:{name:'ChatApp',url:'https://chatapp.example',description:'A product used to test conversations'}});const pid=(await payload(r)).product.id;
+ r=await call(DB,'/discover/products/'+pid+'/feedback',{method:'POST',headers:{Cookie:u.cookie},body:{body:'The pricing page is confusing to read',kind:'general'}});const tid=(await payload(r)).feedback.id;
+ return {DB,f,u,x,pid,tid}}
+test('messaging: names, roles, locations, timestamps, replies in both directions, privacy',async()=>{
+ const {DB,f,u,x,pid,tid}=await convo();
+ let r=await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}});let d=await payload(r);assert.equal(r.status,200);
+ assert.equal(d.messages.length,1);const root=d.messages[0];assert.equal(root.author.name,'Uche User');assert.equal(root.author.role,'Product user');assert.equal(root.author.location,'Accra, Ghana');assert.ok(Date.parse(root.created_at));assert.equal(root.mine,false);assert.equal(d.thread.viewer_role,'founder');
+ assert.equal(JSON.stringify(d).includes('@example.com'),false,'no email addresses anywhere');assert.equal(JSON.stringify(d).includes('author_id'),false);
+ r=await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:f.cookie},body:{body:'Thanks, we will simplify it.'}});assert.equal(r.status,201);
+ r=await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:u.cookie},body:{body:'Great, thank you!'}});assert.equal(r.status,201);
+ d=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.deepEqual(d.messages.map(m=>m.author.role),['Product user','Founder','Product user']);assert.equal(d.messages[1].author.name,'Founder Fay');assert.equal(d.messages[1].author.location,'Lagos, Nigeria');assert.deepEqual(d.messages.map(m=>m.mine),[true,false,true]);
+ assert.equal((await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:x.cookie}})).status,404,'outsiders cannot open it');
+ assert.equal((await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:x.cookie},body:{body:'let me in please'}})).status,404,'outsiders cannot post');
+ assert.equal((await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:f.cookie},body:{body:'   '}})).status,400);
+ assert.equal((await call(DB,'/threads/voluntary/'+tid)).status,401);
+ DB.close();
+});
+test('messaging: read and unread, seen markers, thread list, notifications cleared when opened',async()=>{
+ const {DB,f,u,pid,tid}=await convo();
+ const list=async(w,q='')=>payload(await call(DB,'/threads'+q,{headers:{Cookie:w.cookie}}));
+ let d=await list(f);assert.equal(d.threads.length,1);assert.equal(d.threads[0].unread,1,'founder has the new feedback unread');assert.equal(d.unread_total,1);assert.equal(d.threads[0].counterpart.name,'Uche User');assert.equal(d.threads[0].viewer_role,'founder');
+ d=await list(u);assert.equal(d.threads[0].unread,0,'authors never see their own message as unread');assert.equal(d.threads[0].counterpart.role,'Founder');
+ let t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[0].unread,true,'viewing does not mark read by itself');
+ assert.equal((await call(DB,'/threads/voluntary/'+tid+'/read',{method:'POST',headers:{Cookie:f.cookie}})).status,200);
+ d=await list(f);assert.equal(d.threads[0].unread,0);assert.equal((await list(f,'?filter=unread')).threads.length,0);
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.equal(t.messages[0].seen,true,'sender sees the founder has read it');
+ await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:f.cookie},body:{body:'Fixed now.'}});
+ d=await list(u);assert.equal(d.threads[0].unread,1);assert.equal(d.threads[0].reply_count,1);assert.match(d.threads[0].preview,/Fixed now/);
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.deepEqual(t.messages.map(m=>m.unread),[false,true]);
+ let n=await payload(await call(DB,'/notifications',{headers:{Cookie:u.cookie}}));assert.equal(n.unread_count,1);
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[1].seen,false,'founder reply is not seen until the sender opens it');
+ await call(DB,'/threads/voluntary/'+tid+'/read',{method:'POST',headers:{Cookie:u.cookie}});n=await payload(await call(DB,'/notifications',{headers:{Cookie:u.cookie}}));assert.equal(n.unread_count,0,'opening a conversation clears its notification');
+ await call(DB,'/threads/voluntary/'+tid+'/read',{method:'POST',headers:{Cookie:u.cookie}});t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[1].seen,true);
+ DB.close();
+});
+test('messaging: edit and delete only your own messages, with a 24 hour edit window and tombstones',async()=>{
+ const {DB,f,u,x,pid,tid}=await convo();
+ let r=await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:f.cookie},body:{body:'Founder reply one'}});const mid=(await payload(r)).message.id;
+ r=await call(DB,'/messages/'+mid,{method:'PATCH',headers:{Cookie:u.cookie},body:{body:'hacked'}});assert.equal(r.status,403,'the other participant cannot edit');
+ r=await call(DB,'/messages/'+mid,{method:'DELETE',headers:{Cookie:u.cookie}});assert.equal(r.status,403,'the other participant cannot delete');
+ r=await call(DB,'/messages/'+mid,{method:'PATCH',headers:{Cookie:x.cookie},body:{body:'hacked'}});assert.equal(r.status,404,'outsiders learn nothing');
+ r=await call(DB,'/messages/'+mid,{method:'PATCH',headers:{Cookie:f.cookie},body:{body:'Founder reply, corrected'}});assert.equal(r.status,200);
+ let t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.equal(t.messages[1].body,'Founder reply, corrected');assert.ok(t.messages[1].edited_at,'edited marker present');assert.equal(t.messages[1].can_edit,false,'viewer cannot edit it');
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[1].can_edit,true);assert.equal(t.messages[1].can_delete,true);
+ DB.sql.prepare("UPDATE feedback_messages SET created_at='2020-01-01T00:00:00.000Z' WHERE id=?").run(mid);
+ r=await call(DB,'/messages/'+mid,{method:'PATCH',headers:{Cookie:f.cookie},body:{body:'too late'}});assert.equal(r.status,409,'edit window closed');
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[1].can_edit,false);assert.equal(t.messages[1].can_delete,true,'delete is still allowed');
+ r=await call(DB,'/messages/'+mid,{method:'DELETE',headers:{Cookie:f.cookie}});assert.equal(r.status,200);
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.equal(t.messages[1].deleted,true);assert.equal(t.messages[1].body,null,'content is gone, a tombstone remains');assert.equal(DB.sql.prepare('SELECT body FROM feedback_messages WHERE id=?').get(mid).body,'[deleted]');
+ assert.equal((await call(DB,'/messages/'+mid,{method:'DELETE',headers:{Cookie:f.cookie}})).status,409);
+ // root message (the original feedback)
+ r=await call(DB,'/threads/voluntary/'+tid,{method:'PATCH',headers:{Cookie:f.cookie},body:{body:'founder cannot rewrite feedback'}});assert.equal(r.status,403);
+ r=await call(DB,'/threads/voluntary/'+tid,{method:'DELETE',headers:{Cookie:f.cookie}});assert.equal(r.status,403);
+ r=await call(DB,'/threads/voluntary/'+tid,{method:'PATCH',headers:{Cookie:u.cookie},body:{body:'The pricing page is confusing, sorry for the typo fix'}});assert.equal(r.status,200);
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}}));assert.match(t.messages[0].body,/typo fix/);assert.ok(t.messages[0].edited_at);
+ r=await call(DB,'/threads/voluntary/'+tid,{method:'DELETE',headers:{Cookie:u.cookie}});assert.equal(r.status,200);
+ assert.equal((await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:f.cookie}})).status,404,'deleted feedback disappears for the founder');
+ t=await payload(await call(DB,'/threads/voluntary/'+tid,{headers:{Cookie:u.cookie}}));assert.equal(t.messages[0].deleted,true);assert.equal(t.thread.can_reply,false);
+ r=await call(DB,'/threads/voluntary/'+tid+'/messages',{method:'POST',headers:{Cookie:u.cookie},body:{body:'cannot reply to a deleted thread'}});assert.equal(r.status,409);
+ DB.close();
+});
+test('messaging: structured test feedback is a conversation too, editable but not deletable',async()=>{
+ const {DB,f,u,x,pid}=await convo();
+ let r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:x.cookie},body:{product_id:pid}});assert.equal(r.status,201);
+ r=await call(DB,'/feedback',{method:'POST',headers:{Cookie:x.cookie},body:{product_id:pid,body:'Signup took too many steps to finish',consent:true}});assert.equal(r.status,201);
+ let fb=(await payload(await call(DB,'/products/'+pid+'/feedback',{headers:{Cookie:f.cookie}}))).feedback[0];assert.equal(fb.author.role,'Tester');assert.ok(fb.thread_id);assert.equal(JSON.stringify(fb).includes('@example.com'),false);
+ let t=await payload(await call(DB,'/threads/test/'+fb.thread_id,{headers:{Cookie:f.cookie}}));assert.equal(t.messages[0].author.role,'Tester');
+ r=await call(DB,'/threads/test/'+fb.thread_id+'/messages',{method:'POST',headers:{Cookie:f.cookie},body:{body:'Thank you, which step lost you?'}});assert.equal(r.status,201);
+ assert.equal((await call(DB,'/threads/test/'+fb.thread_id,{headers:{Cookie:u.cookie}})).status,404,'other users cannot read test feedback threads');
+ r=await call(DB,'/threads/test/'+fb.thread_id,{method:'DELETE',headers:{Cookie:x.cookie}});assert.equal(r.status,409);assert.match((await payload(r)).error,/recorded test result/);
+ r=await call(DB,'/threads/test/'+fb.thread_id,{method:'PATCH',headers:{Cookie:x.cookie},body:{body:'Signup took five steps; step three lost me'}});assert.equal(r.status,200);
+ const list=await payload(await call(DB,'/threads',{headers:{Cookie:x.cookie}}));assert.equal(list.threads.find(th=>th.type==='test').unread,1);
+ DB.close();
+});
+test('messaging: earlier single replies are carried into conversations by the migration',()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const f of ['0001_initial','0002_ai_campaigns_and_tracking','0003_distribution_workflows','0004_operational_reporting','0005_self_service_publishing','0006_user_capabilities','0007_directory','0008_general_feedback','0009_hardening','0010_notifications'])sql.exec(readFileSync(new URL('../migrations/'+f+'.sql',import.meta.url),'utf8'));
+ sql.exec("INSERT INTO users(id,email,password_hash,password_salt,referral_code) VALUES('o','o@x.com','h','s','r1'),('a','a@x.com','h','s','r2')");
+ sql.exec("INSERT INTO products(id,owner_id,name,url,description,listing_status) VALUES('p','o','P','https://p.example','Describes the product','approved')");
+ sql.exec("INSERT INTO product_feedback(id,product_id,author_id,body,owner_response,owner_responded_at) VALUES('f1','p','a','Original feedback text','Old founder reply','2026-09-01T10:00:00.000Z'),('f2','p','a','Feedback with no reply yet','',NULL)");
+ sql.exec(readFileSync(new URL('../migrations/0011_messaging_terms_shares.sql',import.meta.url),'utf8'));
+ const m=sql.prepare("SELECT thread_id,author_id,body,created_at FROM feedback_messages").all();assert.equal(m.length,1);assert.deepEqual({...m[0]},{thread_id:'f1',author_id:'o',body:'Old founder reply',created_at:'2026-09-01T10:00:00.000Z'});
+ assert.equal(sql.prepare("SELECT COUNT(*) c FROM product_feedback").get().c,2,'original feedback rows untouched');assert.equal(sql.prepare("SELECT terms_version v FROM users WHERE id='o'").get().v,'','existing users are not auto-accepted');
+ sql.close();
+});
+test('share tracking: counts own share buttons once, by method, owner only, no raw identifiers',async()=>{
+ const {DB,f,u,x,pid}=await convo();
+ const share=(method,{ip='1.1.1.1',ua='Mozilla/5.0',id=pid,source='detail'}={})=>app.fetch(new Request('https://api.example.test/api/v1/discover/share/'+id,{method:'POST',headers:{Origin:'https://requva.pages.dev','X-Requested-With':'Requva','Content-Type':'application/json','CF-Connecting-IP':ip,'User-Agent':ua},body:JSON.stringify({method,source})}),env(DB));
+ let r=await share('whatsapp');assert.equal(r.status,201);assert.equal((await payload(r)).counted,true);
+ r=await share('whatsapp');assert.equal((await payload(r)).counted,false,'same visitor and method within 10 minutes counts once');
+ for(const m of ['copy_link','email','gmail','x','linkedin','facebook','native'])assert.equal((await share(m)).status,201,m);
+ assert.equal((await share('whatsapp',{ip:'2.2.2.2'})).status,201,'a different visitor counts');
+ r=await share('myspace');assert.equal(r.status,400);r=await share('x',{id:'nope'});assert.equal(r.status,404);
+ r=await share('x',{ip:'3.3.3.3',ua:'Googlebot/2.1'});assert.equal((await payload(r)).counted,false,'bots are ignored');
+ r=await share('x',{ip:'3.3.3.4',ua:''});assert.equal((await payload(r)).counted,false);
+ const g=await payload(await call(DB,'/products/'+pid+'/growth?days=30',{headers:{Cookie:f.cookie}}));
+ assert.equal(g.sharing.total,9);assert.equal(g.sharing.all_time,9);assert.equal(g.sharing.by_method.find(m=>m.method==='whatsapp').count,2);assert.equal(g.sharing.recent.length,9);assert.ok(g.sharing.recent.every(s=>s.method&&Date.parse(s.created_at)));assert.match(g.sharing.note,/does not show whether anyone opened or shared/);
+ assert.equal(JSON.stringify(g.sharing).includes('visitor'),false,'visitor hashes are never returned');
+ const prods=await payload(await call(DB,'/products',{headers:{Cookie:f.cookie}}));assert.equal(prods.products.find(p=>p.id===pid).share_count,9);
+ assert.equal((await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:x.cookie}})).status,404,'other founders cannot read share stats');
+ DB.sql.prepare("UPDATE products SET status='paused' WHERE id=?").run(pid);assert.equal((await share('x',{ip:'9.9.9.9'})).status,404,'unpublished products cannot be share-counted');
  DB.close();
 });

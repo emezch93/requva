@@ -70,3 +70,9 @@ Before deploying, back up D1: `cd worker && npx wrangler d1 export requva-produc
    - `https://requva.pages.dev/sitemap.xml` lists `/p/...` URLs.
    - `https://requva.pages.dev/robots.txt` loads.
    - Log in, open the Alerts button, create feedback from a second account and see the alert.
+
+## Release 4: messaging, terms, support email, share tracking (migration 0011)
+
+1. Back up D1. Deploy as before; health should report `schemaVersion: 11`.
+2. After deploy, everyone including you must accept the Terms once (a dialog appears; the terms page shows an inline accept box). Until then changes are refused with a clear message.
+3. Check: register with the optional name and location, send feedback from a second account, reply and edit from both sides, open Alerts, open a product, use each Share option, then look at the Shares section in the growth workspace.

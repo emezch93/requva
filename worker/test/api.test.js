@@ -553,3 +553,22 @@ test('share tracking: counts own share buttons once, by method, owner only, no r
  DB.sql.prepare("UPDATE products SET status='paused' WHERE id=?").run(pid);assert.equal((await share('x',{ip:'9.9.9.9'})).status,404,'unpublished products cannot be share-counted');
  DB.close();
 });
+
+test('opportunity catalog: channel names are forgiving, errors name the problem, verification gates the founder list',async()=>{
+ const DB=database(),admin=await signup(DB,'oadmin@example.com'),owner=await signup(DB,'ofounder@example.com');old(DB);DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
+ const mk=(over={})=>call(DB,'/admin/distribution/opportunities',{method:'POST',headers:{Cookie:admin.cookie},body:{name:'Product Hunt',destination_url:'https://producthunt.com/',source_url:'https://producthunt.com/faq',channel:'Directories',audience:'Makers',rationale:'Launch audience',next_action:'Submit the product',last_verified_at:'2026-10-20',...over}});
+ let r=await call(DB,'/distribution/channels',{headers:{Cookie:owner.cookie}});const channels=(await payload(r)).channels;assert.ok(channels.includes('Directories')&&channels.includes('Search discovery'));assert.equal(channels.length,15);
+ for(const [typed,saved] of [['directory','Directories'],['REDDIT','Reddit'],['  linkedin ','LinkedIn'],['twitter','X'],['community','Communities'],['search','Search discovery']]){r=await mk({name:'Entry '+typed.trim(),channel:typed});assert.equal(r.status,201,typed+': '+await r.clone().text());assert.equal((await payload(r)).opportunity.channel,saved,typed+' is saved as '+saved)}
+ r=await mk({channel:'MySpace'});let d=await payload(r);assert.equal(r.status,400);assert.match(d.error,/Choose a channel from the list: LinkedIn/);assert.ok(d.errors.length>=1);
+ r=await mk({channel:'',name:'',destination_url:'ftp://x'});d=await payload(r);assert.equal(r.status,400);assert.ok(d.errors.length>=3,'every problem is listed, not one vague sentence');assert.ok(d.errors.some(e=>/name/i.test(e)));assert.ok(d.errors.some(e=>/destination/i.test(e)));
+ r=await mk({name:'Hunt verified'});const id=(await payload(r)).opportunity.id;
+ const founderList=async()=>(await payload(await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}}))).opportunities.map(o=>o.name);
+ assert.deepEqual(await founderList(),[],'nothing is visible to founders until an admin verifies it');
+ r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified'}});assert.equal(r.status,200);assert.deepEqual(await founderList(),['Hunt verified'],'verified entry appears in the founder selection list');
+ r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Listed',url:'https://listed.example',description:'A product to distribute through a verified opportunity'}});const pid=(await payload(r)).product.id;
+ r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:pid,opportunity_id:id,title:'Launch post',planned_action:'Submit on launch day',next_action:'Write the tagline'}});assert.equal(r.status,201,await r.clone().text());
+ r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{channel:'forum'}});assert.equal(r.status,200);assert.deepEqual(await founderList(),[],'editing a verified entry sends it back for review');
+ r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:pid,opportunity_id:id,title:'Again',planned_action:'x',next_action:'y'}});assert.equal(r.status,409);assert.match((await payload(r)).error,/verified distribution opportunity/);
+ r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified'}});assert.equal(r.status,403,'founders cannot verify');
+ DB.close();
+});

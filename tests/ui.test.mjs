@@ -328,3 +328,54 @@ test('profile form in account settings saves display name and location',async()=
  m.d.querySelector('#account-settings').click();const pf=m.d.querySelector('#profile-form');assert.equal(pf.elements.display_name.value,'Ada');assert.equal(pf.elements.location.value,'Lagos');assert.match(m.d.querySelector('#settings-terms').textContent,/accepted/);
  pf.elements.display_name.value='Ada O.';pf.elements.location.value='Abuja';pf.dispatchEvent(new m.w.Event('submit',{cancelable:true}));await tick(120);assert.deepEqual(saved,{display_name:'Ada O.',location:'Abuja'});
 });
+
+/* ---------- distribution opportunities (admin catalog and founder selection list) ---------- */
+const CHANNEL_SET=(()=>{const w=fs.readFileSync(new URL('../worker/src/index.js',import.meta.url),'utf8'),block=w.match(/const CHANNELS = new Set\(\[([^\]]+)\]/)[1];return [...block.matchAll(/'([^']+)'/g)].map(m=>m[1])})();
+const adminUser={...user,role:'admin',terms:{required:false}};
+const oppRow=(o={})=>({id:'o1',name:'Product Hunt',destination_url:'https://producthunt.com',source_url:'https://producthunt.com/faq',channel:'Directories',audience:'Makers',rationale:'Launch audience',requirements:'',eligibility:'',next_action:'Submit',last_verified_at:'2026-10-20',execution_mode:'manual',status:'needs_review',...o});
+function distApi(state){return async(p,q,o)=>{const method=o?.method||'GET';
+ if(p==='/auth/me')return res({user:state.user||adminUser});
+ if(p==='/admin/summary')return res({users:1});
+ if(p==='/admin/products')return state.failOps?res({error:'boom'},500):res({products:[]});
+ if(p==='/admin/campaigns')return res({campaigns:[]});if(p==='/admin/users')return res({users:[]});if(p==='/admin/reports')return res({reports:[]});
+ if(p==='/ai/admin/settings'||p.startsWith('/admin/ai'))return state.failAI?res({error:'AI settings unavailable'},500):res({settings:{enabled:false,daily_limit:5},usage:[]});
+ if(p==='/admin/distribution/opportunities'&&method==='GET')return res({opportunities:state.opps});
+ if(p==='/admin/distribution/opportunities'&&method==='POST'){state.posted=JSON.parse(o.body);return state.postError?res({error:state.postError,errors:[state.postError]},400):res({opportunity:{id:'new'}},201)}
+ if(/^\/admin\/distribution\/opportunities\//.test(p)&&method==='PATCH'){const body=JSON.parse(o.body),id=p.split('/').pop();state.patches=(state.patches||[]).concat({id,body});const row=state.opps.find(x=>x.id===id);if(row&&body.status)row.status=body.status;return res({ok:true})}
+ if(p==='/admin/distribution/activities'||p==='/admin/testing/requests'||p==='/admin/product-reports')return state.failActivities?res({error:'reports down'},500):res({activities:[],requests:[],reports:[]});
+ if(p==='/distribution/opportunities'){if(state.failOpps)return res({error:'opportunities down'},500);return res({opportunities:state.opps.filter(x=>x.status==='verified')})}
+ if(p==='/distribution/activities'){if(state.failActivities)return res({error:'activities down'},500);return res({activities:[]})}
+ if(p==='/testing/requests')return res({requests:[]});
+ if(p==='/products')return res({products:[{id:'p1',name:'Mine',url:'https://m.example',description:'d',stage:'launched',status:'active',listing_status:'approved'}]});
+ if(p==='/discover/products')return res({products:[],total:0,page:1,page_size:24});
+ if(p==='/distribution/activities'&&method==='POST'){state.activity=JSON.parse(o.body);return res({activity:{id:'a1'}},201)}
+ return res({products:[],campaigns:[],requests:[],activities:[],opportunities:[],feedback:[],categories:[]})}}
+const distPage=async(state)=>{const m=mount('dashboard.html',{url:'https://requva.pages.dev/dashboard.html',fetch:distApi(state),scripts:['session.js','share.js','app.js']});await tick(500);return m};
+test('opportunity admin form: channel is a pick list matching exactly what the server accepts',()=>{
+ for(const f of ['dashboard.html','index.html','testers.html','admin.html']){const h=read(f),m=h.match(/id="admin-opportunity-form">.*?<label>Channel<select name="channel" required>(.*?)<\/select>/s);assert.ok(m,f+' channel is a select');const opts=[...m[1].matchAll(/<option([^>]*)>([^<]*)<\/option>/g)].filter(x=>!/value=""/.test(x[1])).map(x=>x[2]);assert.deepEqual(opts,CHANNEL_SET,f+' options equal the server channel list');assert.ok(!/placeholder="Reddit, LinkedIn, directory/.test(h),f+' misleading free text hint removed')}
+});
+test('opportunity admin: the review list and verify control load even when other admin sections fail',async()=>{
+ const state={opps:[oppRow()],failOps:true,failAI:true};const {d,w}=await distPage(state);
+ const sel=d.querySelector('[data-opportunity-status]');assert.ok(sel,'review status control is present');assert.deepEqual([...sel.options].map(o=>o.textContent),['needs_review','verified','archived']);assert.match(d.querySelector('#admin-opportunity-list').textContent,/Product Hunt/);
+ assert.match(d.querySelector('#admin-load-errors').textContent,/Operations.*boom/s);assert.match(d.querySelector('#admin-load-errors').textContent,/AI settings/);
+ sel.value='verified';sel.dispatchEvent(new w.Event('change'));await tick(200);
+ assert.deepEqual(state.patches,[{id:'o1',body:{status:'verified'}}],'choosing verified sends the verification');assert.equal(d.querySelector('[data-opportunity-status]').value,'verified','list reloads showing the new status');
+});
+test('opportunity admin: partial failures are shown, not hidden, and the rest still renders',async()=>{
+ const {d}=await distPage({opps:[oppRow()],failActivities:true});assert.match(d.querySelector('#admin-opportunity-list').textContent,/Some opportunity data could not load/);assert.match(d.querySelector('#admin-opportunity-list').textContent,/Product Hunt/);
+});
+test('opportunity admin: saving sends a canonical channel and shows the server\'s specific message',async()=>{
+ const state={opps:[],postError:'Choose a channel from the list: LinkedIn, Facebook.'};const {d,w}=await distPage(state);const f=d.querySelector('#admin-opportunity-form');
+ for(const [k,v] of Object.entries({name:'Product Hunt',destination_url:'https://producthunt.com',source_url:'https://producthunt.com/faq',channel:'Directories',audience:'Makers',rationale:'x',next_action:'Submit',last_verified_at:'2026-10-20'}))f.elements[k].value=v;
+ f.dispatchEvent(new w.Event('submit',{cancelable:true}));await tick(150);assert.equal(state.posted.channel,'Directories');assert.match(f.querySelector('.form-error')?.textContent||d.body.textContent,/Choose a channel from the list/,'specific error shown to the admin');
+ assert.match(d.querySelector('#admin-opportunity-list').textContent,/No opportunities entered/);
+});
+test('founder opportunity list: shows verified entries, explains when empty, survives other failures',async()=>{
+ const founder={...user,terms:{required:false}};
+ let m=await distPage({user:founder,opps:[oppRow({status:'verified'}),oppRow({id:'o2',name:'Hidden draft',status:'needs_review'})]});
+ let sel=m.d.querySelector('#distribution-activity-form [name=opportunity_id]');assert.deepEqual([...sel.options].map(o=>o.textContent),['Choose opportunity','Product Hunt · Directories'],'only verified entries are selectable');
+ m=await distPage({user:founder,opps:[]});sel=m.d.querySelector('#distribution-activity-form [name=opportunity_id]');assert.deepEqual([...sel.options].map(o=>o.textContent),['No verified opportunities yet']);assert.match(m.d.querySelector('#opportunity-list').textContent,/No administrator-verified opportunities/);assert.ok(!/Add one in Opportunity catalog/.test(m.d.querySelector('#opportunity-list').textContent),'founders are not told to use admin tools');
+ m=await distPage({opps:[]});assert.match(m.d.querySelector('#opportunity-list').textContent,/Add one in Opportunity catalog administration/,'admins are pointed to the catalog');
+ m=await distPage({user:founder,opps:[oppRow({status:'verified'})],failActivities:true});sel=m.d.querySelector('#distribution-activity-form [name=opportunity_id]');assert.equal(sel.options.length,2,'a failing activities request no longer empties the opportunity list');assert.match(m.d.querySelector('#distribution-source-note').textContent,/Some distribution data could not load/);
+ m=await distPage({user:founder,opps:[oppRow({status:'verified'})],failOpps:true});sel=m.d.querySelector('#distribution-activity-form [name=opportunity_id]');assert.deepEqual([...sel.options].map(o=>o.textContent),['Could not load opportunities']);assert.match(m.d.querySelector('#opportunity-list').textContent,/could not be loaded: opportunities down/);
+});

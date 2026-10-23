@@ -114,3 +114,4 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .terms-check{display:flex;gap:8px;align-items:flex-start;line-height:1.4}.terms-status{margin:12px 0;padding:12px;border:2px solid var(--ink);background:var(--paper2)}.terms-ok{color:var(--moss);font-weight:700;margin:0}
 .share-recent{list-style:none;padding:0;margin:10px 0;display:grid;gap:4px;font-size:14px}
 @media(max-width:800px){.msg-layout{grid-template-columns:1fr}.msg-layout.showing-thread .msg-list-pane{display:none}.msg-layout:not(.showing-thread) .msg-thread-pane{display:none}.msg-back{display:inline-block}.msg-list{max-height:none}}
+.opp-status{display:grid;gap:4px;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em}

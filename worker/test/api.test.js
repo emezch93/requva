@@ -44,63 +44,28 @@ test('register, me, login, logout, and recovery reset use Workers-supported 100k
  r=await call(DB,'/auth/me',{headers:{Cookie:loggedIn}});assert.equal((await payload(r)).user,null,'reset revokes prior sessions');
  r=await call(DB,'/auth/login',{method:'POST',body:{email:account.user.email,password:'founder-password-456'}});assert.equal(r.status,200);
 });
-test('product, campaign, tester, consent feedback, analytics, and duplicate-safe tracking events',async()=>{
+test('product, tester, consent feedback, and duplicate-safe tracking events',async()=>{
  const DB=database();const owner=await signup(DB);const tester=await signup(DB,'tester@example.com');
  let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Fieldnotes',url:'https://fieldnotes.example',description:'Shared project workspace for small design teams',stage:'idea'}});assert.equal(r.status,201);const product=(await payload(r)).product;DB.sql.prepare("UPDATE products SET listing_status='approved' WHERE id=?").run(product.id);
- r=await call(DB,'/campaigns',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn which teams need this'}});assert.equal(r.status,201);assert.equal((await payload(r)).campaign.execution_mode,'manual');
  r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id}});assert.equal(r.status,201);
  r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id}});assert.equal(r.status,409);
  r=await call(DB,'/feedback',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id,body:'Onboarding was clear; inviting a teammate was confusing.',consent:true}});assert.equal(r.status,201);
- r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal(r.status,200);let stats=await payload(r);assert.equal(stats.feedbackCount,1);assert.equal(stats.visits,0);
+ const growth=async()=>payload(await call(DB,'/products/'+product.id+'/growth?days=30',{headers:{Cookie:owner.cookie}}));let g=await growth();assert.equal(g.feedback.structured_in_period,1);assert.equal(g.acquisition.configured,false,'no tracking token yet');
  r=await call(DB,'/integrations/token',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id}});assert.equal(r.status,201);const token=(await payload(r)).token;
  const send=()=>app.fetch(new Request('https://api.example.test/api/v1/analytics/events',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json','CF-Connecting-IP':crypto.randomUUID()},body:JSON.stringify({event_type:'visit',event_key:'first-visit'})}),env(DB));
  r=await send();assert.equal(r.status,201);r=await send();assert.equal((await payload(r)).duplicate,true);
- r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});stats=await payload(r);assert.equal(stats.visits,1);
+ g=await growth();assert.equal(g.acquisition.configured,true);assert.equal(g.acquisition.visits,1,'the duplicate event was not counted twice');
 });
 test('guest, CSRF, and admin access boundaries are enforced',async()=>{
  const DB=database();let r=await call(DB,'/health');const health=await payload(r);assert.equal(health.passwordHashIterations,100000);assert.equal(health.schemaVersion,11);r=await call(DB,'/auth/me');assert.equal(r.status,200);assert.equal((await payload(r)).user,null);
  r=await call(DB,'/products');assert.equal(r.status,401);
  r=await app.fetch(new Request('https://api.example.test/api/v1/auth/register',{method:'POST',headers:{Origin:'https://attacker.invalid','X-Requested-With':'Requva','Content-Type':'application/json'},body:'{}'}),env(DB));assert.equal(r.status,403);
- const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
+ const user=await signup(DB,'ordinary@example.com');r=await call(DB,'/admin/summary',{headers:{Cookie:user.cookie}});assert.equal(r.status,403);
  DB.sql.prepare('UPDATE users SET role=? WHERE id=?').run('admin',user.user.id);
- r=await call(DB,'/admin/ai/status',{headers:{Cookie:user.cookie},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'secret-value'}});assert.equal(r.status,200);const status=await payload(r);assert.equal(status.configured,true);assert.equal(JSON.stringify(status).includes('secret-value'),false);
- r=await call(DB,'/admin/ai/settings',{method:'POST',headers:{Cookie:user.cookie},extra:{AI_ENABLED:'true'},body:{enabled:true,daily_limit:7,fast_model:'gemini-3.5-flash-lite',reasoning_model:'gemini-3.8-flash'}});assert.equal(r.status,200);assert.equal(JSON.parse(DB.sql.prepare("SELECT value_json FROM settings WHERE key='ai.config'").get().value_json).daily_limit,7);
-});
-test('Gemini stays server-side, uses the configured key, and records usage',async()=>{
- const DB=database(),user=await signup(DB);
- let productResponse=await call(DB,'/products',{method:'POST',headers:{Cookie:user.cookie},body:{name:'Fieldnotes',url:'https://fieldnotes.example',description:'Shared workspace for design teams',stage:'idea'}});const product=(await payload(productResponse)).product;
- const expected={summary:'Try one focused community interview.',evidence:['Founder-provided description only.'],audiences:[{label:'Small design teams',why:'They may share the coordination problem.'}],channels:[{name:'Communities',fit:'Relevant peers can give feedback.',first_step:'Ask a moderator before posting.'}],draft:{headline:'Testing a calmer workspace',body:'I am looking for a few teams to try this.',call_to_action:'Reply if interested.'},actions:[{priority:'high',title:'Interview teams',reason:'Learn before scaling.',next_step:'Talk to three relevant teams.'}],uncertainties:['The website was not fetched.']};
- const originalFetch=globalThis.fetch;let sentKey=null;
- globalThis.fetch=async(_url,options)=>{sentKey=new Headers(options.headers).get('x-goog-api-key');return new Response(JSON.stringify({candidates:[{content:{parts:[{text:JSON.stringify(expected)}]}}]}),{status:200,headers:{'Content-Type':'application/json'}})};
- try{
-  const r=await call(DB,'/ai/product-analysis',{method:'POST',headers:{Cookie:user.cookie},body:{product_id:product.id},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'test-secret-not-returned',GEMINI_FAST_MODEL:'gemini-3.5-flash-lite',GEMINI_REASONING_MODEL:'gemini-3.8-flash'}});
-  assert.equal(r.status,200,await r.clone().text());const result=await payload(r);assert.equal(result.result.summary,expected.summary);assert.equal(sentKey,'test-secret-not-returned');assert.equal(JSON.stringify(result).includes('test-secret-not-returned'),false);
-  const usage=DB.sql.prepare('SELECT outcome,feature FROM ai_usage').get();assert.equal(usage.outcome,'success');assert.equal(usage.feature,'product_analysis');
-  const plan=await call(DB,'/ai/campaign-plan',{method:'POST',headers:{Cookie:user.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn from relevant users'},extra:{AI_ENABLED:'true',GEMINI_API_KEY:'test-secret-not-returned',GEMINI_FAST_MODEL:'gemini-3.5-flash-lite',GEMINI_REASONING_MODEL:'gemini-3.8-flash'}});
-  assert.equal(plan.status,201,await plan.clone().text());assert.ok((await payload(plan)).campaign.id);
-  const stats=await call(DB,'/analytics/summary',{headers:{Cookie:user.cookie}});assert.equal((await payload(stats)).campaignActivity,0,'AI campaign plans are not completed distribution activity');
- }finally{globalThis.fetch=originalFetch;DB.close()}
+ r=await call(DB,'/admin/summary',{headers:{Cookie:user.cookie}});assert.equal(r.status,200);const sum=await payload(r);assert.ok(sum.users>=1);assert.equal(JSON.stringify(sum).includes('campaign'),false);
+ r=await call(DB,'/admin/settings',{headers:{Cookie:user.cookie}});assert.equal(r.status,200);
 });
 
-test('campaign plans stay out of activity totals until an evidenced owner report',async()=>{
- const DB=database(),owner=await signup(DB,'campaign-owner@example.com');
- let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Workpad',url:'https://workpad.example',description:'A shared workspace for small teams',stage:'idea'}});
- assert.equal(r.status,201);const product=(await payload(r)).product;
- r=await call(DB,'/campaigns',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,channel:'Communities',goal:'Learn from relevant users'}});
- assert.equal(r.status,201);const campaign=(await payload(r)).campaign;
- r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,0,'a saved plan is not executed work');
- DB.sql.prepare("INSERT INTO analytics_events(id,owner_id,product_id,event_type,source) VALUES(?,?,?,'campaign_activity','manual')").run(crypto.randomUUID(),owner.user.id,product.id);
- const legacy=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(legacy)).campaignActivity,0,'legacy plan events remain stored but are excluded from execution totals');
- assert.equal(DB.sql.prepare("SELECT COUNT(*) AS n FROM analytics_events WHERE event_type='campaign_activity'").get().n,1,'legacy record is preserved');
- r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,409,'campaign must be started before completion');
- r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'in_progress'}});assert.equal(r.status,200);
- r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed'}});assert.equal(r.status,400,'completion needs evidence');
- r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'completed',completion_notes:'Read the community rules and submitted an approved product post.'}});assert.equal(r.status,200);
- r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,1,'a reported action is counted once');
- r=await call(DB,'/campaigns/'+campaign.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'in_progress'}});assert.equal(r.status,409,'a completed report is final');
- r=await call(DB,'/analytics/summary',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).campaignActivity,1);
- DB.close();
-});
 test('owners can manage testing-request availability and cannot reopen expired requests',async()=>{
  const DB=database(),owner=await signup(DB,'request-owner@example.com'),other=await signup(DB,'other-owner@example.com');
  let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Testable',url:'https://testable.example',description:'A product looking for useful feedback'}});
@@ -114,42 +79,6 @@ test('owners can manage testing-request availability and cannot reopen expired r
  r=await call(DB,'/testing/requests/'+expiredId,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'open'}});assert.equal(r.status,400);
  DB.close();
 });
-test('distribution opportunities require admin verification and owner completion requires independent review',async()=>{
- const DB=database(),owner=await signup(DB,'founder@example.com'),admin=await signup(DB,'admin@example.com'),tester=await signup(DB,'volunteer@example.com');
- DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
- let r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Fieldnotes',url:'https://fieldnotes.example',description:'A shared workspace for small design teams',problem:'Project context is scattered',audience:'Small design teams',category:'Productivity',objective:'Learn if teams return',feedback_target:'Onboarding clarity',stage:'idea'}});
- assert.equal(r.status,201,await r.clone().text());const product=(await payload(r)).product;
- assert.equal(product.listing_status,'approved');assert.equal(product.published,true);
- r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'valid product is public without admin approval');
- r=await call(DB,'/products/'+product.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{description:'Updated launch details for the public listing.'}});assert.equal(r.status,200);r=await call(DB,'/discover/products');assert.equal((await payload(r)).products.length,1,'a clean edit stays published without review');
- r=await call(DB,'/admin/distribution/opportunities',{method:'POST',headers:{Cookie:admin.cookie},body:{name:'Design team community',destination_url:'https://community.example/join',source_url:'https://community.example/rules',channel:'Communities',audience:'Small design teams',rationale:'Members discuss team workflows',requirements:'Ask moderators before sharing',eligibility:'Product founders',next_action:'Read posting rules',last_verified_at:'2026-10-19'}});
- assert.equal(r.status,201,await r.clone().text());const opportunity=(await payload(r)).opportunity;assert.equal(opportunity.status,'needs_review');
- r=await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).opportunities.length,0);
- r=await call(DB,'/admin/distribution/opportunities/'+opportunity.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified'}});assert.equal(r.status,200);
- r=await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).opportunities.length,1);
- r=await call(DB,'/admin/distribution/opportunities/'+opportunity.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{rationale:'Updated after checking current community rules.'}});assert.equal(r.status,200);assert.equal((await payload(r)).status,'needs_review');r=await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).opportunities.length,0,'editing a verified listing sends it back to review');r=await call(DB,'/admin/distribution/opportunities/'+opportunity.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified'}});assert.equal(r.status,200);
- r=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,tester_type:'Small design team leads',instructions:'Try the first project setup flow.',eligibility:'Currently managing a small team',effort_minutes:15,feedback_questions:'What felt confusing?',consent_terms:'Your feedback is shared with the product owner.'}});
- assert.equal(r.status,201,await r.clone().text());const request=(await payload(r)).request;
- r=await call(DB,'/discover/products');let listing=(await payload(r)).products[0];assert.equal(listing.testing_request_id,request.id);assert.equal(listing.feedback_questions,'What felt confusing?');
- r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id,testing_request_id:request.id}});assert.equal(r.status,400);
- r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id,testing_request_id:request.id,consent:true}});assert.equal(r.status,201,await r.clone().text());
- assert.equal(DB.sql.prepare('SELECT testing_consent_terms FROM testers WHERE user_id=?').get(tester.user.id).testing_consent_terms,'Your feedback is shared with the product owner.');
- r=await call(DB,'/testers/start',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id}});assert.equal(r.status,200);
- r=await call(DB,'/feedback',{method:'POST',headers:{Cookie:tester.cookie},body:{product_id:product.id,body:'Setup was straightforward.',consent:true}});assert.equal(r.status,201);
- r=await call(DB,'/testing/requests',{headers:{Cookie:owner.cookie}});assert.equal((await payload(r)).requests[0].feedback_count,1);
- r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:product.id,opportunity_id:opportunity.id,title:'Ask community moderators',planned_action:'Review current rules and request approval before posting.',draft:'I am testing a new workspace and would value feedback.',next_action:'Read the pinned community rules.'}});
- assert.equal(r.status,201,await r.clone().text());const activity=(await payload(r)).activity;
- r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'blocked'}});assert.equal(r.status,400,'blocked work requires a reason');
- r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'blocked',notes:'The moderators have not replied yet.'}});assert.equal(r.status,200);
- r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'reported_completed',external_url:'https://community.example/posts/123',evidence_notes:'The post is visible at the linked URL.'}});assert.equal(r.status,200);assert.equal((await payload(r)).status,'reported_completed');
- r=await call(DB,'/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified_completed'}});assert.equal(r.status,403);
- r=await call(DB,'/admin/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified_completed',verification_notes:'The linked post is public and matches this plan.'}});assert.equal(r.status,403);
- r=await call(DB,'/admin/distribution/activities/'+activity.id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified_completed',verification_notes:'The linked post is public and matches this plan.'}});assert.equal(r.status,200);
- r=await call(DB,'/products/'+product.id+'/reports',{method:'POST',headers:{Cookie:tester.cookie},body:{category:'misleading',details:'Please check the description.'}});assert.equal(r.status,201);
- r=await call(DB,'/admin/product-reports',{headers:{Cookie:admin.cookie}});assert.equal((await payload(r)).reports.length,1);
- DB.close();
-});
-
 test('self-service publishing: invalid rejected, suspicious held, duplicates handled, reports restrict, owners cannot self-release',async()=>{
  const DB=database(),a=await signup(DB,'a@example.com'),b=await signup(DB,'b@example.com');
  const post=(who,body)=>call(DB,'/products',{method:'POST',headers:{Cookie:who.cookie},body});
@@ -272,10 +201,10 @@ test('growth workspace: honest metrics, funnel states, unconfigured tracking, ow
  r=await call(DB,'/products/'+pid+'/growth?days=7',{headers:{Cookie:f.cookie}});let d=await payload(r);assert.equal(r.status,200);
  assert.equal(d.discovery.listing_views,2);assert.equal(d.discovery.outbound_clicks,0);
  assert.equal(d.acquisition.configured,false);assert.equal(d.acquisition.message,'Signup tracking not configured');assert.equal(d.acquisition.signups,undefined,'no zero signups when unconfigured');
- assert.equal(d.testing.opted_in,0);assert.match(d.distribution.note,/verified/i);
+ assert.equal(d.testing.opted_in,0);assert.equal(d.distribution,undefined,'distribution tracking is retired');
  r=await call(DB,'/testing/requests',{method:'POST',headers:{Cookie:f.cookie},body:{product_id:pid,tester_type:'Anyone',instructions:'Try the main flow.',feedback_questions:'What broke?',consent_terms:'Feedback goes to the owner.'}});assert.equal(r.status,201);
  r=await call(DB,'/testers/join',{method:'POST',headers:{Cookie:o.cookie},body:{product_id:pid,testing_request_id:(await payload(r)).request?.id}});
- r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(d.testing.campaigns_created,1);
+ r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:f.cookie}});d=await payload(r);assert.equal(d.testing.requests_created,1);
  r=await call(DB,'/products/'+pid+'/growth',{headers:{Cookie:o.cookie}});assert.equal(r.status,404);
  r=await call(DB,'/products/'+pid+'/growth');assert.equal(r.status,401);
  DB.close();
@@ -554,21 +483,16 @@ test('share tracking: counts own share buttons once, by method, owner only, no r
  DB.close();
 });
 
-test('opportunity catalog: channel names are forgiving, errors name the problem, verification gates the founder list',async()=>{
- const DB=database(),admin=await signup(DB,'oadmin@example.com'),owner=await signup(DB,'ofounder@example.com');old(DB);DB.sql.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.user.id);
- const mk=(over={})=>call(DB,'/admin/distribution/opportunities',{method:'POST',headers:{Cookie:admin.cookie},body:{name:'Product Hunt',destination_url:'https://producthunt.com/',source_url:'https://producthunt.com/faq',channel:'Directories',audience:'Makers',rationale:'Launch audience',next_action:'Submit the product',last_verified_at:'2026-10-20',...over}});
- let r=await call(DB,'/distribution/channels',{headers:{Cookie:owner.cookie}});const channels=(await payload(r)).channels;assert.ok(channels.includes('Directories')&&channels.includes('Search discovery'));assert.equal(channels.length,15);
- for(const [typed,saved] of [['directory','Directories'],['REDDIT','Reddit'],['  linkedin ','LinkedIn'],['twitter','X'],['community','Communities'],['search','Search discovery']]){r=await mk({name:'Entry '+typed.trim(),channel:typed});assert.equal(r.status,201,typed+': '+await r.clone().text());assert.equal((await payload(r)).opportunity.channel,saved,typed+' is saved as '+saved)}
- r=await mk({channel:'MySpace'});let d=await payload(r);assert.equal(r.status,400);assert.match(d.error,/Choose a channel from the list: LinkedIn/);assert.ok(d.errors.length>=1);
- r=await mk({channel:'',name:'',destination_url:'ftp://x'});d=await payload(r);assert.equal(r.status,400);assert.ok(d.errors.length>=3,'every problem is listed, not one vague sentence');assert.ok(d.errors.some(e=>/name/i.test(e)));assert.ok(d.errors.some(e=>/destination/i.test(e)));
- r=await mk({name:'Hunt verified'});const id=(await payload(r)).opportunity.id;
- const founderList=async()=>(await payload(await call(DB,'/distribution/opportunities',{headers:{Cookie:owner.cookie}}))).opportunities.map(o=>o.name);
- assert.deepEqual(await founderList(),[],'nothing is visible to founders until an admin verifies it');
- r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{status:'verified'}});assert.equal(r.status,200);assert.deepEqual(await founderList(),['Hunt verified'],'verified entry appears in the founder selection list');
- r=await call(DB,'/products',{method:'POST',headers:{Cookie:owner.cookie},body:{name:'Listed',url:'https://listed.example',description:'A product to distribute through a verified opportunity'}});const pid=(await payload(r)).product.id;
- r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:pid,opportunity_id:id,title:'Launch post',planned_action:'Submit on launch day',next_action:'Write the tagline'}});assert.equal(r.status,201,await r.clone().text());
- r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:admin.cookie},body:{channel:'forum'}});assert.equal(r.status,200);assert.deepEqual(await founderList(),[],'editing a verified entry sends it back for review');
- r=await call(DB,'/distribution/activities',{method:'POST',headers:{Cookie:owner.cookie},body:{product_id:pid,opportunity_id:id,title:'Again',planned_action:'x',next_action:'y'}});assert.equal(r.status,409);assert.match((await payload(r)).error,/verified distribution opportunity/);
- r=await call(DB,'/admin/distribution/opportunities/'+id,{method:'PATCH',headers:{Cookie:owner.cookie},body:{status:'verified'}});assert.equal(r.status,403,'founders cannot verify');
+
+test('retired features are gone: routes answer 404, nothing leaks, existing tables are left in place',async()=>{
+ const DB=database(),u=await signup(DB,'retired@example.com');old(DB);DB.sql.prepare("UPDATE users SET role='admin' WHERE email='retired@example.com'").run();
+ for(const [m,p] of [['GET','/campaigns'],['POST','/campaigns'],['POST','/referrals'],['GET','/analytics/summary'],['GET','/distribution/opportunities'],['GET','/distribution/activities'],['POST','/distribution/activities'],['GET','/distribution/channels'],['POST','/ai/product-analysis'],['GET','/ai/status'],['GET','/admin/ai/status'],['POST','/admin/ai/settings'],['GET','/admin/campaigns'],['GET','/admin/distribution/opportunities'],['POST','/admin/distribution/opportunities'],['GET','/admin/distribution/activities']]){
+  const r=await call(DB,p,{method:m,headers:{Cookie:u.cookie},body:m==='POST'?{}:undefined});assert.equal(r.status,404,m+' '+p+' should be gone');}
+ const h=await payload(await call(DB,'/health'));assert.equal('aiEnabled' in h,false,'health no longer mentions AI');
+ const reg=await call(DB,'/auth/register',{method:'POST',body:{email:'r2@example.com',password:'founder-password-123',accept_terms:true,capabilities:['founder'],...recovery}});assert.equal(JSON.stringify(await payload(reg)).includes('referral'),false,'referral codes are no longer exposed');
+ const me=await payload(await call(DB,'/auth/me',{headers:{Cookie:u.cookie}}));assert.equal('referral_code' in me.user,false);
+ const tables=DB.sql.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(x=>x.name);for(const keep of ['campaigns','distribution_opportunities','distribution_activities','referrals','ai_usage'])assert.ok(tables.includes(keep),keep+' table is kept so no data is lost');
+ // the core still works
+ let r=await call(DB,'/testing/requests',{headers:{Cookie:u.cookie}});assert.equal(r.status,200);r=await call(DB,'/admin/testing/requests',{headers:{Cookie:u.cookie}});assert.equal(r.status,200);r=await call(DB,'/admin/product-reports',{headers:{Cookie:u.cookie}});assert.equal(r.status,200);
  DB.close();
 });

@@ -19,15 +19,14 @@ function sharing(sh){
   el('div',{class:'dir-grid'},metric('Shares in this period',num(sh.total),'Share button uses counted in the selected period.'),metric('Shares all time',num(sh.all_time)),by.map(x=>metric(METHOD[x.method]||x.method,num(x.count)))),
   recent.length?el('ul',{class:'share-recent','aria-label':'Recent shares'},recent.map(r=>el('li',{text:(METHOD[r.method]||r.method)+' · '+when(r.created_at)}))):el('p',{class:'form-note',text:'No shares recorded in this period.'}),
   el('p',{class:'form-note',text:sh.note||'Requva counts clicks on its own share buttons. It does not show whether anyone opened or shared the product elsewhere.'}))}
-function render(d){d=d||{};const disc=d.discovery||{},t=d.testing||{},fb=d.feedback||{},dist=(d.distribution&&d.distribution.by_status)||{},prod=d.product||{};
+function render(d){d=d||{};const disc=d.discovery||{},t=d.testing||{},fb=d.feedback||{},prod=d.product||{};
  const status=prod.listing_status==='approved'?'Live':prod.listing_status==='pending'?'Held for review':prod.listing_status?'Restricted':'Unknown';
  return[
   group('Discovery on Requva',metric('Listing views',num(disc.listing_views),'Opens of your Requva listing.'),metric('Outbound clicks',num(disc.outbound_clicks),'Clicks through Requva to your site. Not visits or signups.'),metric('Listing status',status,prod.hold_reason||'')),
   acquisition(d.acquisition),
   sharing(d.sharing),
-  group('Testing',metric('Campaigns created',num(t.campaigns_created)),metric('Opted in',num(t.opted_in),'Interest only.'),metric('Started',num(t.started)),metric('Feedback submitted',num(t.feedback_submitted))),
-  group('Feedback',metric('Voluntary feedback',num(fb.general_in_period)),metric('Answered by you',num(fb.general_answered)),metric('Structured test feedback',num(fb.structured_in_period))),
-  group('Distribution',metric('Reported complete',num((dist.reported_completed||0)+(dist.awaiting_verification||0)),'Founder reported.'),metric('Verified complete',num(dist.verified_completed||0),'Independently verified.'),metric('Unsuccessful or blocked',num((dist.unsuccessful||0)+(dist.blocked||0))))]}
+  group('Testing',metric('Testing requests created',num(t.requests_created)),metric('Opted in',num(t.opted_in),'Interest only.'),metric('Started',num(t.started)),metric('Feedback submitted',num(t.feedback_submitted))),
+  group('Feedback',metric('Voluntary feedback',num(fb.general_in_period)),metric('Answered by you',num(fb.general_answered)),metric('Structured test feedback',num(fb.structured_in_period)))]}
 let seq=0;
 async function loadGrowth(){const sel=$('#growth-product'),body=$('#growth-body'),st=$('#growth-status');if(!sel||!body)return;const id=sel.value;if(!id)return;const days=$('#growth-days').value,my=++seq;
  body.replaceChildren();body.dataset.product=id;st.textContent='Loading metrics for this product…';

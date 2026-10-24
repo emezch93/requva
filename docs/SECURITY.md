@@ -4,12 +4,12 @@
 
 - Passwords are salted PBKDF2-HMAC-SHA-256 hashes with 100,000 iterations. Cloudflare Workers Web Crypto supports up to 100,000 PBKDF2 iterations. Session tokens are random, only their SHA-256 hashes are stored, and sessions expire after seven days.
 - Session cookies are `Secure`, `HttpOnly`, and `SameSite=None` for the current separate Pages and Workers hosts. State-changing browser requests require the configured exact origin and `X-Requested-With: Requva`; credentialed CORS is allowlisted.
-- SQL is parameterized. Product/campaign writes use ownership checks. Admin APIs require an explicit `admin` role. Product creation, campaign creation, tester joins, and consent feedback combine primary writes and audit entries in D1 batches.
+- SQL is parameterized. Product writes use ownership checks. Admin APIs require an explicit `admin` role. Product creation, campaign creation, tester joins, and consent feedback combine primary writes and audit entries in D1 batches.
 - Signup, login, password reset, and product changes have D1 rate limits. Password reset uses a salted, hashed security answer and revokes every session on success.
-- Gemini is called only by the Worker using `env.GEMINI_API_KEY` in the `x-goog-api-key` header. The key is not returned, logged, or exposed to frontend code. Requests use output schemas, a timeout, bounded inputs, user quotas, and safe error messages. AI feature inputs are user-supplied and treated as untrusted.
+- Requva calls no third party AI service and holds no API secrets.
 - Product tracking tokens are random per-product credentials stored as hashes. Event ingestion accepts only supported event names and idempotency keys; the token binds events to an existing product.
 - Submitted product URLs are validated and stored, never fetched, preventing URL-fetch SSRF. Campaign plans are marked manual and never reported as externally published.
-- Responses use no-store caching and security headers; logs avoid passwords, tokens, and the Gemini secret.
+- Responses use no-store caching and security headers; logs avoid passwords, and tokens.
 
 ## Admin setup
 
@@ -30,13 +30,11 @@ Security-question recovery is weaker than email-based one-time links because ans
 These controls are not a security certification. Configure Cloudflare bot/WAF controls, backups, retention/deletion procedures, and alerts before broad public use. D1 rate limits write to the database and may need tuning as traffic grows. Monitor Worker logs for errors; never paste secrets into tickets or screenshots.
 
 
-## Directory, tester, and distribution controls
+## Directory and tester controls
 
 Valid product listings publish automatically. Backend screening (required fields, URL validation, link shorteners, IP or local hosts, spam terms, duplicate addresses, daily limit and rate limits) holds suspicious submissions as pending. Three distinct open reports also hold a listing. Owners can release only screening holds by fixing the listing; report holds and restrictions need an administrator. Listing reports are stored for review. Testers must opt in to an open request and confirm its consent terms; the terms they accepted are stored with their tester record. Product owners see aggregate opt-in, started, and feedback-submitted counts, not tester contact details. Testers may withdraw their opt-in.
 
-Owners may report activity status and evidence but cannot set `verified_completed`. Only an administrator can verify owner-reported evidence, and an administrator cannot verify their own activity. Analytics events authenticated with a product tracking token are owner-reported measurements. They are deduplicated but not independently audited by Requva.
 
-The opportunity catalog is manually maintained. A verification date records when an administrator checked the supplied destination and source links; the app does not crawl or continuously recheck those links.
 
 ## Sessions without a custom domain
 

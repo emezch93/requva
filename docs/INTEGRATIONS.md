@@ -1,51 +1,20 @@
 # Integrations and execution status
 
-Requva connects a static frontend to a Cloudflare Worker, Cloudflare D1, and optionally Google Gemini. Social publishing and outreach are not connected.
+Requva connects a static frontend to a Cloudflare Worker and Cloudflare D1. There are no third party integrations to configure.
 
 | Feature | Current behavior |
 | --- | --- |
 | Tester feedback | Users opt into an active product; feedback is shared with the owner only when the tester consents. |
-| Campaign channels | LinkedIn, Facebook, Instagram, X, Reddit, TikTok, Pinterest, email, directories, search discovery, forums, communities, partnerships, referrals, and affiliates are planning targets. The user executes each plan manually. |
-| Gemini | Server-side structured generation for product analysis, campaign drafts, tester feedback summaries, and next-step suggestions. Requires the `GEMINI_API_KEY` Worker secret and enabled AI settings. Limited to at most 50 requests per user per UTC day; default is 10. |
 | Visits, signups, activation, retention | Counted only from events sent by a product owner's server using its per-product tracking token. Browser-submitted events are rejected. Duplicate event keys are ignored. |
-| Audience and distribution notes | Generated from founder-submitted product text and stored tester feedback. Requva does not fetch the submitted URL or claim live research. |
+| Listing views, outbound clicks, shares | Recorded by Requva itself. Bots and repeats are ignored. These are not visits to the founder's site or signups. |
+| Notifications | In-app only. There is no email delivery. |
 
-## Set up Gemini in Cloudflare
+## Send tracking events from your own server
 
-1. Open **Workers & Pages → requva → Settings → Variables and Secrets**.
-2. Under **Production**, add a **Secret** named exactly `GEMINI_API_KEY`.
-3. Paste the API key created in Google AI Studio and save/deploy the Worker.
-4. Sign into Requva as an admin, open the admin panel, and use **Test Gemini connection**. The status should say the key is configured. The UI never displays the value.
-5. In the same admin panel, choose the enabled state, daily limit, and supported models. The defaults come from `worker/wrangler.jsonc`.
-
-Never put the key in `frontend/config.js`, page HTML, a GitHub commit, a client-side environment variable, or a support screenshot. If it was exposed, revoke it at Google and create a replacement.
-
-## Send verified product events
-
-In **My products**, create a tracking token and copy it immediately. Requva stores only a hash, so the token is shown once. Keep it on your server (for example, as a deployment secret), never in browser JavaScript. Rotate or revoke it in the same product card.
-
-Send a POST request from your server to `https://requva.emezch93.workers.dev/api/v1/analytics/events`:
-
-```http
-Authorization: Bearer rq_live_YOUR_TOKEN
-Content-Type: application/json
-
-{"event_type":"visit","event_key":"a-unique-event-id"}
-```
-
-Supported event types are `visit`, `signup`, `activation`, and `retention`. Each event needs a unique `event_key`; retries with the same key do not increase the count. Do not send personal information in event keys or payloads. The token authorizes events for one product, and events are attributed to that product's owner. Only send events that your own application has actually observed.
+Create a tracking token for a product in the founder workspace. Send events from your server with `Authorization: Bearer <token>` to `POST /api/v1/analytics/events` with a JSON body such as `{"event_type":"signup","event_key":"user-123-signup"}`. Supported event types are `visit`, `signup`, `activation` and `retention`. Each event needs a unique `event_key`; retries with the same key do not increase the count. Revoking the token turns tracking back to "not configured".
 
 ## What is not integrated
 
-Campaign plans are drafts for a person to review and publish themselves. Saving a plan does not count as an action. Owners must report a completed manual campaign with a note or result link; this is labeled owner-reported and is not independently verified. Requva does not contact customers, publish messages, sign into social sites, or scrape web communities. Gemini suggestions are unverified hypotheses and may be wrong; verify claims before using them. Feedback analysis redacts common email addresses and phone numbers, but do not submit sensitive personal or health information.
+Requva does not publish to social networks, send outreach, send email, or call an AI service. Share buttons only open each service's own share screen.
 
-Review each provider's current terms, consent rules, quotas, and costs before adding more integrations.
-
-
-## Distribution and opportunity catalog
-
-Requva does not publish to social networks or send outreach emails. These execution modes are currently manual or unavailable. Administrators add real opportunities with destination and source links, the audience fit, requirements, eligibility, next action, and a date when the source was checked. New entries begin in needs-review status and do not appear in the founder catalog until an administrator verifies them. Recheck destination rules before use because the catalog can become stale.
-
-Founders may create activities only from verified entries. Activity progress is owner reported. Reporting completion requires a public evidence URL or notes; the product owner cannot verify their own completion. A different administrator must review the evidence and add verification notes before the state becomes verified.
-
-AI opportunity matches only return catalog entries that were already verified by an administrator. The fit explanation is a hypothesis from the supplied product profile and catalog fields, not live research.
+Review each provider's current terms, consent rules, quotas and costs before adding integrations.

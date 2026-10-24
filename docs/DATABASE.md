@@ -58,3 +58,7 @@ Adds `categories` (seeded with nine categories, editable data), listing fields o
 Public routes: `GET /api/v1/discover/categories`, `GET /api/v1/discover/products` (q, category, pricing, stage, testing, sort, page), `GET /api/v1/discover/products/:id`, `POST /api/v1/discover/view/:id`, `GET /api/v1/go/:id` (records an outbound click, then redirects). Owner route: `GET /api/v1/products/:id/discovery-stats?days=7|30|90`.
 
 Default ranking inputs: text match weighted by field (name, tagline and problem, then other fields), listing completeness, open testing request, a boost for listings under 14 days old that decays to zero, and a small daily rotation seeded by product id and date. Click and view counts are deliberately not ranking inputs, so large audiences cannot lock in position. Events are rate limited per visitor and product (30 per hour). Only active, approved listings appear. The raw website address is exposed only through the tracked redirect.
+
+## Tables kept but no longer used
+
+`campaigns`, `distribution_opportunities`, `distribution_activities`, `referrals` and `ai_usage` remain with their data but are no longer read or written. See [RETIRED-FEATURES.md](RETIRED-FEATURES.md) for the optional, backed up way to drop them.

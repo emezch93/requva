@@ -17,8 +17,8 @@ Tests use Node's built-in runner and in-memory SQLite with the actual migrations
 1. In Cloudflare Worker deployment history, verify the active version was built from the current `main` commit. A log saying PBKDF2 requested 120,000 means that version is stale; current source must use exactly `ITERATIONS = 100000`.
 2. Confirm D1 migrations 0001, 0002, 0003, and 0004 applied to the production database.
 3. Check `GET https://requva.emezch93.workers.dev/api/v1/health`; then check signup, login, logout, and session refresh from the Pages site.
-4. As a user, add a product, make a manual campaign, confirm it is not counted until you report completed work with evidence, confirm the listing appears in the directory without admin approval, create and pause/reopen/close an open testing request, opt in with its stated consent, mark testing started, and send consent-based feedback. Add actual opportunity entries as admin before trying the distribution planner.
-5. As an admin, check Gemini status. Add the Worker secret before testing AI; test connection and make one draft. Confirm the secret is never shown in the page or returned by the API.
+4. As a user, add a product and a testing request, opt in from a second account, and confirm counts update only after real actions.
+5. As an admin, open Moderation and testing requests and confirm listing reports load.
 6. Create a tracking token and send a visit from a server. Repeat the same event key and confirm the count remains one. The resulting analytics are owner reported, not independently verified.
 7. Verify Pages and Worker each have a successful, independent Cloudflare deployment. A successful Pages upload does not deploy the Worker.
 
@@ -31,6 +31,6 @@ Check the distinct Pages URLs after deployment: `/`, `/discover.html`, `/dashboa
 
 ## Automated tests
 
-- Worker and database: `cd worker && npm test` (SQLite backed, 29 tests).
+- Worker and database: `cd worker && npm test` (SQLite backed, 27 tests).
 - Frontend and Pages Functions: `cd tests && npm install && npm test` (jsdom, 36 tests). These cover growth rendering, filters and URL state, sharing, notifications UI, product pages, link checks and the Pages Functions.
 - Not covered: real browsers, real Cloudflare D1, live deployment. Run the manual checks in `docs/DEPLOYMENT.md` after each release.

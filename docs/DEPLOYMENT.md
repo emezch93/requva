@@ -16,15 +16,15 @@ Check these settings in the Cloudflare dashboard if a build deploys the wrong fi
 
 1. Commit to GitHub `main`. A frontend commit should trigger Pages. A Worker or migration commit should trigger Workers Builds.
 2. In **Workers & Pages → requva → Deployments**, open the newest production deployment. Confirm its commit SHA is the new `main` SHA and status is **Success**.
-3. Confirm the version settings include `FRONTEND_ORIGIN=https://requva.pages.dev`, `AI_ENABLED=true`, D1 `DB` binding to `requva-production`, and the `GEMINI_API_KEY` secret if AI will be used.
+3. Confirm the version settings include `FRONTEND_ORIGIN=https://requva.pages.dev`, and the D1 `DB` binding to `requva-production`. No AI variables or secrets are needed.
 4. Visit `https://requva.emezch93.workers.dev/api/v1/health` and confirm it returns JSON with `ok: true`.
 5. Pages deploys independently. Confirm its latest successful deployment is also from the current commit. If `requva.pages.dev` shows 404, check **Workers & Pages → requva (Pages) → Deployments** and verify output contains `index.html`; then check **Custom domains** to ensure `requva.pages.dev` is attached to that Pages project.
 
 Do not troubleshoot signup against an old Worker version. The repository source fixes PBKDF2 at `100000`. If a Worker log still says “requested 120000”, Cloudflare is running an older version or a different Worker. Confirm the deployment's Git commit and Worker name, then retry signup only after the new version succeeds.
 
-## Add the Gemini key without exposing it
+## Secrets
 
-In the Worker dashboard, open **Settings → Variables and Secrets → Production → Add → Secret**. Set the name to `GEMINI_API_KEY`, paste the key value from Google AI Studio, and save/deploy. Do not add it to Pages, `frontend/config.js`, `wrangler.jsonc`, GitHub, or browser developer tools. The Worker reads it through `env.GEMINI_API_KEY`.
+No secrets are required. The retired Gemini variables and the `GEMINI_API_KEY` secret can be deleted from the Worker settings.
 
 ## Admin access
 
@@ -32,7 +32,7 @@ Create an account normally, then promote your account using a D1 Console query. 
 
 ## Database
 
-Migration 0002 adds AI usage, saved campaign plan, and hashed product-tracking-token tables. The Worker build command applies pending migrations before deploy. See [DATABASE.md](DATABASE.md) to inspect migration state. Never edit a migration that already ran remotely; add a new numbered migration.
+Migration 0002 added AI usage, saved campaign plan, and hashed product-tracking-token tables. Only the tracking token table is still used; see [RETIRED-FEATURES.md](RETIRED-FEATURES.md). The Worker build command applies pending migrations before deploy. See [DATABASE.md](DATABASE.md) to inspect migration state. Never edit a migration that already ran remotely; add a new numbered migration.
 
 For local code checks, see [TESTING.md](TESTING.md). Cloudflare dashboard credentials and the live deployment are outside this repository; only a successful production deployment and smoke check confirm the service is live.
 
@@ -49,7 +49,7 @@ Before deploying, back up D1: `cd worker && npx wrangler d1 export requva-produc
 2. The Worker build runs `npm run db:remote`, applying 0005 (self service publishing), 0006 (capabilities), 0007 (directory) and 0008 (general feedback). All are additive. 0005 publishes legacy pending listings that pass screening and holds the rest.
 3. Check `https://requva.emezch93.workers.dev/api/v1/health` returns `schemaVersion: 8`.
 4. Smoke test: register with the founder capability, submit a product, open `/discover.html`, search for it, click Visit, open `/product.html?id=...`, leave feedback from a second account, then check the Growth workspace on `/dashboard.html`.
-5. No new secrets, bindings or KV are needed. `GEMINI_API_KEY` stays a Worker secret.
+5. No new secrets, bindings or KV are needed. No AI secret is needed.
 
 ## Release 2: hardening and design (migration 0009)
 
